@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+httpx
+python-whois
+google-generativeai
+pyzbar
+pillow
+python-dotenv
+aiosqlite
+pytest

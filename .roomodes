@@ -1,0 +1,5 @@
+# CyberGuardian Architecture Rules:
+1. Risk score (0-100) and risk level MUST ALWAYS be calculated deterministically in backend/app/services/risk_engine.py.
+2. The LLM (Gemini) must NEVER generate, adjust, or calculate risk scores. It only explains evidence.
+3. Use Python FastAPI for the backend and React (Vite) for the frontend.
+4. Keep the code strictly modular (analyzers/, services/, models/, api/).
