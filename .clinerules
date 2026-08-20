@@ -1,0 +1,20 @@
+# CyberGuardian — Autonomous Development Instructions
+
+## Project Context
+CyberGuardian is an AI-assisted Phishing & Threat Intelligence Analyzer built with FastAPI, Pydantic, and Next.js/React.
+
+## Core Architectural Guardrails
+1. **Deterministic Risk Scoring:**
+   - The LLM MUST NOT calculate or alter risk scores.
+   - The Python Risk Scoring Engine (`risk_engine.py`) determines all mathematical scores (0–100) and severity levels (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+2. **Grounded AI Explanations:**
+   - The AI layer (`ai_explainer.py`) is strictly an interpreter. It explains the exact evidence and deterministic score provided to it in plain language.
+   - It must NEVER hallucinate threat indicators not present in the scan evidence.
+3. **Graceful Fallbacks:**
+   - Every external service (Gemini API, Google Safe Browsing API, WHOIS) MUST implement deterministic offline fallbacks so tests and local runs never crash when API keys are absent or rate-limited.
+4. **Zero-Trust Security:**
+   - All URL inputs must undergo SSRF mitigation (blocking loopback, link-local, RFC 1918 private ranges, and non-HTTP/HTTPS schemes).
+5. **Code Style & Testing:**
+   - Use Python 3.12+ type annotations and Pydantic v2 validation models.
+   - Write comprehensive unit tests in `backend/tests/` with mocked external calls.
+   - All tests must pass via `pytest`.

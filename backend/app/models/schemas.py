@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import List, Optional
+from app.services.ai_explainer import AIExplanation
 
 class URLScanRequest(BaseModel):
     url: str
@@ -24,3 +25,4 @@ class URLScanResponse(BaseModel):
     url: str
     evidence: URLEvidence
     risk_assessment: RiskAssessment
+    explanation: AIExplanation
