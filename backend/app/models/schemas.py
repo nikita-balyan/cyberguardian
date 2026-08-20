@@ -26,3 +26,30 @@ class URLScanResponse(BaseModel):
     evidence: URLEvidence
     risk_assessment: RiskAssessment
     explanation: AIExplanation
+
+class QREvidence(BaseModel):
+    has_qr_code: bool
+    extracted_text: Optional[str] = None
+    is_url: bool = False
+    url_evidence: Optional[URLEvidence] = None
+
+class QRScanResponse(BaseModel):
+    evidence: QREvidence
+    risk_assessment: RiskAssessment
+    explanation: AIExplanation
+
+class MessageEvidence(BaseModel):
+    urgency_detected: bool
+    financial_lures_detected: bool
+    suspicious_phone_or_sender: bool
+    extracted_urls: List[str]
+    url_evidences: List[URLEvidence]
+
+class MessageScanRequest(BaseModel):
+    message: str
+
+class MessageScanResponse(BaseModel):
+    message: str
+    evidence: MessageEvidence
+    risk_assessment: RiskAssessment
+    explanation: AIExplanation

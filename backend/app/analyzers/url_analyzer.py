@@ -1,7 +1,7 @@
 import ipaddress
 import socket
 import ssl
-import datetime
+from datetime import datetime, timezone
 import logging
 from typing import Optional
 from urllib.parse import urlparse
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 SUSPICIOUS_TLDS = {".xyz", ".top", ".buzz", ".tk", ".cc", ".gq", ".ml", ".ga", ".work", ".loan", ".click"}
 POPULAR_BRANDS = ["sbi", "hdfc", "paytm", "google", "amazon", "paypal", "netflix", "apple", "microsoft", "icici"]
+
 
 def is_private_ip(hostname: str) -> bool:
     if hostname.lower() == "localhost":
@@ -31,19 +32,24 @@ def is_private_ip(hostname: str) -> bool:
         except Exception:
             return False
 
+
 def check_ssl(hostname: str) -> tuple[bool, Optional[str]]:
     try:
         context = ssl.create_default_context()
         with socket.create_connection((hostname, 443), timeout=3.0) as sock:
             with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                 cert = ssock.getpeercert()
+                if not cert:
+                    return False, None
+
                 # Check expiration
                 not_after = cert.get('notAfter')
                 if not_after:
-                    expiry_date = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
-                    if datetime.datetime.utcnow() > expiry_date:
+                    # Parse SSL expiration date and enforce UTC timezone
+                    expiry_date = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) > expiry_date:
                         return False, "Expired SSL Certificate"
-                
+
                 issuer = cert.get('issuer')
                 issuer_str = "Unknown"
                 if issuer:
@@ -59,6 +65,7 @@ def check_ssl(hostname: str) -> tuple[bool, Optional[str]]:
         logger.debug(f"SSL check failed for {hostname}: {e}")
         return False, None
 
+
 def get_domain_age_days(domain: str) -> Optional[int]:
     try:
         w = whois.whois(domain)
@@ -66,12 +73,16 @@ def get_domain_age_days(domain: str) -> Optional[int]:
         if isinstance(creation_date, list):
             creation_date = creation_date[0]
         if creation_date:
-            if isinstance(creation_date, datetime.datetime):
-                delta = datetime.datetime.utcnow() - creation_date
+            if isinstance(creation_date, datetime):
+                # Ensure creation_date is timezone-aware UTC for arithmetic comparison
+                if creation_date.tzinfo is None:
+                    creation_date = creation_date.replace(tzinfo=timezone.utc)
+                delta = datetime.now(timezone.utc) - creation_date
                 return max(0, delta.days)
     except Exception as e:
         logger.debug(f"WHOIS lookup failed for {domain}: {e}")
     return None
+
 
 def check_brand_impersonation(hostname: str) -> bool:
     hostname_lower = hostname.lower()
@@ -80,6 +91,7 @@ def check_brand_impersonation(hostname: str) -> bool:
             if not hostname_lower.endswith(f"{brand}.com") and not hostname_lower.endswith(f"{brand}.in") and hostname_lower != f"www.{brand}.com" and hostname_lower != f"{brand}.com":
                 return True
     return False
+
 
 async def analyze_url(url: str) -> URLEvidence:
     if not url.startswith(("http://", "https://")):

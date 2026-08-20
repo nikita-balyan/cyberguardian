@@ -1,4 +1,70 @@
-from ..models.schemas import URLEvidence, RiskAssessment
+from ..models.schemas import URLEvidence, RiskAssessment, QREvidence, MessageEvidence
+
+def calculate_qr_risk(evidence: QREvidence) -> RiskAssessment:
+    if not evidence.has_qr_code:
+        return RiskAssessment(
+            score=0,
+            level="LOW",
+            triggers=["No QR code detected"]
+        )
+    if not evidence.is_url or not evidence.url_evidence:
+        return RiskAssessment(
+            score=0,
+            level="LOW",
+            triggers=["QR code payload is not a URL"]
+        )
+    
+    assessment = calculate_url_risk(evidence.url_evidence)
+    assessment.triggers.insert(0, f"Decoded URL from QR code: {evidence.extracted_text}")
+    return assessment
+
+def calculate_message_risk(evidence: MessageEvidence) -> RiskAssessment:
+    triggers = []
+    score = 0
+    
+    if evidence.urgency_detected:
+        score += 20
+        triggers.append("Urgency or pressure tactics detected in text (+20)")
+        
+    if evidence.financial_lures_detected:
+        score += 25
+        triggers.append("Financial or credential lures detected in text (+25)")
+        
+    if evidence.suspicious_phone_or_sender:
+        score += 15
+        triggers.append("Suspicious phone number or spoofed sender pattern detected (+15)")
+        
+    # If there are any extracted URLs, find the highest risk score among them
+    max_url_score = 0
+    max_url_triggers = []
+    for url_ev in evidence.url_evidences:
+        url_risk = calculate_url_risk(url_ev)
+        if url_risk.score > max_url_score:
+            max_url_score = url_risk.score
+            max_url_triggers = url_risk.triggers
+            
+    if max_url_score > 0:
+        score += max_url_score
+        triggers.append(f"High risk embedded URL detected with score {max_url_score}/100")
+        for t in max_url_triggers:
+            triggers.append(f"  [URL Trigger] {t}")
+            
+    score = max(0, min(100, score))
+    
+    if score >= 80:
+        level = 'CRITICAL'
+    elif score >= 60:
+        level = 'HIGH'
+    elif score >= 30:
+        level = 'MEDIUM'
+    else:
+        level = 'LOW'
+        
+    return RiskAssessment(
+        score=score,
+        level=level,
+        triggers=triggers
+    )
 
 def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     triggers = []
