@@ -1,6 +1,18 @@
+# Virtual environments
 venv/
-.env
+.venv/
+env/
+
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
-cyberguardian.db
+
+# Environment secrets
+.env
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
