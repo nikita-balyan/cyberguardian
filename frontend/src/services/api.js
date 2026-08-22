@@ -48,6 +48,15 @@ export const scanMessage = async (message) => {
   }
 }
 
+export const getScanHistory = async () => {
+  try {
+    const response = await apiClient.get('/history')
+    return response.data
+  } catch (error) {
+    throw handleApiError(error)
+  }
+}
+
 const handleApiError = (error) => {
   if (error.response) {
     return new Error(error.response.data?.detail || `Server error: ${error.response.status}`)

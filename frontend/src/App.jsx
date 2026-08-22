@@ -3,7 +3,8 @@ import Header from './components/Header'
 import UrlScanner from './components/UrlScanner'
 import QrScanner from './components/QrScanner'
 import MessageScanner from './components/MessageScanner'
-import { Globe, QrCode, MessageSquare, Shield } from 'lucide-react'
+import HistoryTab from './components/HistoryTab'
+import { Globe, QrCode, MessageSquare, Shield, Clock } from 'lucide-react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('url')
@@ -29,7 +30,7 @@ export default function App() {
 
         {/* Navigation Tabs */}
         <div className="flex justify-center">
-          <div className="bg-slate-900/90 border border-slate-800/80 p-1.5 rounded-2xl flex items-center space-x-1 shadow-xl backdrop-blur-md">
+          <div className="bg-slate-900/90 border border-slate-800/80 p-1.5 rounded-2xl flex items-center space-x-1 shadow-xl backdrop-blur-md flex-wrap justify-center">
             <button
               onClick={() => setActiveTab('url')}
               className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
@@ -65,6 +66,18 @@ export default function App() {
               <MessageSquare className="w-4 h-4" />
               <span>Phishing Message</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                activeTab === 'history'
+                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/25'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <Clock className="w-4 h-4" />
+              <span>Scan History & Analytics</span>
+            </button>
           </div>
         </div>
 
@@ -73,6 +86,7 @@ export default function App() {
           {activeTab === 'url' && <UrlScanner />}
           {activeTab === 'qr' && <QrScanner />}
           {activeTab === 'message' && <MessageScanner />}
+          {activeTab === 'history' && <HistoryTab />}
         </div>
       </main>
 

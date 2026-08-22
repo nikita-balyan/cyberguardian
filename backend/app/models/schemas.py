@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from app.services.ai_explainer import AIExplanation
 
@@ -53,3 +54,22 @@ class MessageScanResponse(BaseModel):
     evidence: MessageEvidence
     risk_assessment: RiskAssessment
     explanation: AIExplanation
+
+class ScanAuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    scan_type: str
+    target: str
+    risk_level: str
+    risk_score: int
+    summary: Optional[str] = None
+    evidence: dict
+    created_at: datetime
+
+class HistoryResponse(BaseModel):
+    total_scans: int
+    risk_breakdown: dict
+    scans: List[ScanAuditLogResponse]
+
+

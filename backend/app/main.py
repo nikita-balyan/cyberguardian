@@ -1,8 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api.v1 import health, endpoints
+from app.models.database import init_db
 
 app = FastAPI(title="CyberGuardian API")
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 # Configure CORS
 app.add_middleware(
