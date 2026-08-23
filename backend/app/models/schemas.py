@@ -16,6 +16,7 @@ class URLEvidence(BaseModel):
     suspicious_tld: bool = False
     brand_impersonation: bool = False
     safe_browsing_hit: bool = False
+    threat_intel: Optional[dict] = None
 
 class RiskAssessment(BaseModel):
     score: int

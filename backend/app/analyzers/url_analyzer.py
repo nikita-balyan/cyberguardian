@@ -9,7 +9,7 @@ import httpx
 import whois
 
 from ..models.schemas import URLEvidence
-from .threat_intel import check_safe_browsing
+from ..services.threat_intel import ThreatIntelService
 
 logger = logging.getLogger(__name__)
 
@@ -150,8 +150,10 @@ async def analyze_url(url: str) -> URLEvidence:
     # 7. Basic brand-squatting detection
     brand_impersonation = check_brand_impersonation(final_hostname)
 
-    # 8. Safe Browsing Check
-    safe_browsing_hit = await check_safe_browsing(final_url)
+    # 8. Threat Intelligence Lookup (URLhaus & Google Safe Browsing)
+    threat_intel_service = ThreatIntelService()
+    threat_intel = await threat_intel_service.lookup(final_url)
+    safe_browsing_hit = threat_intel.get("sources", {}).get("google_safebrowsing", {}).get("flagged", False) or threat_intel.get("flagged", False)
 
     return URLEvidence(
         domain_age_days=domain_age_days,
@@ -162,6 +164,7 @@ async def analyze_url(url: str) -> URLEvidence:
         is_ip_address=is_ip,
         suspicious_tld=suspicious_tld,
         brand_impersonation=brand_impersonation,
-        safe_browsing_hit=safe_browsing_hit
+        safe_browsing_hit=safe_browsing_hit,
+        threat_intel=threat_intel
     )
 

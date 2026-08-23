@@ -125,7 +125,8 @@ async def analyze_message_text(text: str) -> MessageEvidence:
                 is_ip_address=False,
                 suspicious_tld=any(url.endswith(tld) for tld in [".xyz", ".top", ".buzz", ".tk", ".cc", ".gq", ".ml"]),
                 brand_impersonation=False,
-                safe_browsing_hit=False
+                safe_browsing_hit=False,
+                threat_intel=None
             ))
 
     return MessageEvidence(

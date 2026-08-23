@@ -71,9 +71,24 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     
     # Category 1: Threat Intelligence (Cap: 60)
     cat1_score = 0
-    if evidence.safe_browsing_hit:
+    threat_intel = getattr(evidence, "threat_intel", None)
+    threat_intel_flagged = False
+    if isinstance(threat_intel, dict):
+        threat_intel_flagged = threat_intel.get("flagged", False)
+    elif hasattr(threat_intel, "flagged"):
+        threat_intel_flagged = threat_intel.flagged
+
+    if evidence.safe_browsing_hit or threat_intel_flagged:
         cat1_score += 60
-        triggers.append("Safe Browsing threat intelligence hit (+60)")
+        if evidence.safe_browsing_hit:
+            triggers.append("Safe Browsing threat intelligence hit (+60)")
+        if threat_intel_flagged:
+            summary_list = threat_intel.get("threat_summary", []) if isinstance(threat_intel, dict) else getattr(threat_intel, "threat_summary", [])
+            if summary_list:
+                for summary in summary_list:
+                    triggers.append(f"External Threat Intelligence match: {summary} (+60)")
+            else:
+                triggers.append("External Threat Intelligence flagged this payload (+60)")
     cat1_score = min(60, cat1_score)
 
     # Category 2: Domain Age (Cap: 35)
@@ -116,8 +131,8 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     # Total Score Calculation
     total_score = cat1_score + cat2_score + cat3_score + other_score
 
-    # Override: If Safe Browsing hit is true, minimum score is pinned to 95
-    if evidence.safe_browsing_hit:
+    # Override: If Safe Browsing hit or threat intel flagged is true, minimum score is pinned to 95 (CRITICAL)
+    if evidence.safe_browsing_hit or threat_intel_flagged:
         total_score = max(total_score, 95)
 
     # Clamp total score between 0 and 100

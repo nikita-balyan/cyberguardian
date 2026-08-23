@@ -67,7 +67,63 @@ export default function EvidenceInspector({ evidence }) {
               </div>
             )}
 
-            {evidence.safe_browsing_hit !== undefined && (
+            {evidence.threat_intel !== undefined && evidence.threat_intel !== null ? (
+              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800 sm:col-span-2 md:col-span-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400 block font-medium">External Threat Intelligence (URLhaus & Safe Browsing)</span>
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center space-x-1 ${evidence.threat_intel.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
+                    {evidence.threat_intel.flagged ? (
+                      <>
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        <span>FLAGGED BY THREAT FEEDS</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>BENIGN / CLEAN</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+
+                {evidence.threat_intel.flagged && evidence.threat_intel.threat_summary && evidence.threat_intel.threat_summary.length > 0 && (
+                  <div className="p-3 bg-rose-950/50 border border-rose-900/70 rounded-xl text-xs text-rose-300 space-y-1">
+                    <span className="font-bold uppercase tracking-wider block text-rose-400">Threat Feed Alert Summary:</span>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      {evidence.threat_intel.threat_summary.map((summary, idx) => (
+                        <li key={idx}>{summary}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  {evidence.threat_intel.sources?.urlhaus && (
+                    <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-200 block">URLhaus Feed</span>
+                        <span className="text-[11px] text-slate-400">Status: {evidence.threat_intel.sources.urlhaus.status}</span>
+                      </div>
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${evidence.threat_intel.sources.urlhaus.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/15 text-emerald-400'}`}>
+                        {evidence.threat_intel.sources.urlhaus.flagged ? 'Flagged' : 'Clean'}
+                      </span>
+                    </div>
+                  )}
+
+                  {evidence.threat_intel.sources?.google_safebrowsing && (
+                    <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-slate-200 block">Google Safe Browsing</span>
+                        <span className="text-[11px] text-slate-400">Status: {evidence.threat_intel.sources.google_safebrowsing.status}</span>
+                      </div>
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${evidence.threat_intel.sources.google_safebrowsing.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/15 text-emerald-400'}`}>
+                        {evidence.threat_intel.sources.google_safebrowsing.flagged ? 'Flagged' : 'Clean / Unconfigured'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : evidence.safe_browsing_hit !== undefined && (
               <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
                 <span className="text-xs text-slate-400 block font-medium">Threat Intel</span>
                 <span className={`text-sm font-bold mt-1 block ${evidence.safe_browsing_hit ? 'text-rose-400' : 'text-emerald-400'}`}>
