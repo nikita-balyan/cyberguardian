@@ -1,0 +1,16 @@
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.db
+cyberguardian.db
+.git/
+.github/
+README.md
