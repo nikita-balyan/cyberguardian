@@ -3,6 +3,7 @@ import { QrCode, Upload, Loader2, Sparkles, AlertCircle, X } from 'lucide-react'
 import RiskMeter from './RiskMeter'
 import AiExplanationCard from './AiExplanationCard'
 import EvidenceInspector from './EvidenceInspector'
+import ReportExport from './ReportExport'
 import { scanQrCode } from '../services/api'
 
 export default function QrScanner() {
@@ -141,6 +142,7 @@ export default function QrScanner() {
           />
           <AiExplanationCard explanation={result.explanation} />
           <EvidenceInspector evidence={result.evidence} />
+          <ReportExport scanData={result} />
         </div>
       )}
     </div>

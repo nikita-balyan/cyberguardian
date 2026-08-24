@@ -59,6 +59,17 @@ export const getScanHistory = async () => {
   }
 }
 
+export const exportPdf = async (scanData) => {
+  try {
+    const response = await apiClient.post('/export/pdf', scanData, {
+      responseType: 'blob',
+    })
+    return response.data
+  } catch (error) {
+    throw handleApiError(error)
+  }
+}
+
 const handleApiError = (error) => {
   if (error.response) {
     return new Error(error.response.data?.detail || `Server error: ${error.response.status}`)

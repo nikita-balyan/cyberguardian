@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Response
 from sqlalchemy.orm import Session
 import inspect
 from app.models.schemas import (
@@ -20,6 +20,7 @@ from app.services.risk_engine import (
     calculate_message_risk,
 )
 from app.services.ai_explainer import AIExplainer
+from app.services.report_generator import ReportGenerator
 
 router = APIRouter()
 ai_explainer = AIExplainer()
@@ -177,4 +178,24 @@ def get_scan_history(db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error retrieving scan history: {str(e)}",
+        )
+
+@router.post("/export/pdf")
+async def export_pdf(scan_data: dict):
+    """
+    Export scan results as a downloadable forensic threat report PDF.
+    """
+    try:
+        pdf_bytes = ReportGenerator.generate_pdf(scan_data)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=cyberguardian_threat_report.pdf"
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate forensic PDF report: {str(e)}",
         )

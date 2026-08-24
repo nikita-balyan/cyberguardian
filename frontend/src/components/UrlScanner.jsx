@@ -3,6 +3,7 @@ import { Globe, Search, Loader2, Sparkles, AlertCircle } from 'lucide-react'
 import RiskMeter from './RiskMeter'
 import AiExplanationCard from './AiExplanationCard'
 import EvidenceInspector from './EvidenceInspector'
+import ReportExport from './ReportExport'
 import { scanUrl } from '../services/api'
 
 export default function UrlScanner() {
@@ -116,6 +117,7 @@ export default function UrlScanner() {
           />
           <AiExplanationCard explanation={result.explanation} />
           <EvidenceInspector evidence={result.evidence} />
+          <ReportExport scanData={result} />
         </div>
       )}
     </div>

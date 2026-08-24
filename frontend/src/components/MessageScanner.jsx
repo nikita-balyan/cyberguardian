@@ -3,6 +3,7 @@ import { MessageSquare, Loader2, Sparkles, AlertCircle } from 'lucide-react'
 import RiskMeter from './RiskMeter'
 import AiExplanationCard from './AiExplanationCard'
 import EvidenceInspector from './EvidenceInspector'
+import ReportExport from './ReportExport'
 import { scanMessage } from '../services/api'
 
 export default function MessageScanner() {
@@ -113,6 +114,7 @@ export default function MessageScanner() {
           />
           <AiExplanationCard explanation={result.explanation} />
           <EvidenceInspector evidence={result.evidence} />
+          <ReportExport scanData={result} />
         </div>
       )}
     </div>
