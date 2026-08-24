@@ -8,12 +8,13 @@ logger = logging.getLogger(__name__)
 class ThreatIntelService:
     def __init__(self):
         self.google_api_key = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY", "")
+        self.urlhaus_api_key = os.getenv("URLHAUS_API_KEY", "")
 
     async def check_urlhaus(self, url: str) -> Dict[str, Any]:
         """
         Query URLhaus public API (https://urlhaus-api.abuse.ch/v1/url/).
         POST request with form data: {"url": url}.
-        Flag if query_status == "ok".
+        Gracefully handles 401s, 403s, and timeouts without crashing callers.
         """
         endpoint = "https://urlhaus-api.abuse.ch/v1/url/"
         result = {
@@ -24,9 +25,14 @@ class ThreatIntelService:
             "tags": None,
             "urlhaus_reference": None
         }
+
+        headers = {}
+        if self.urlhaus_api_key:
+            headers["Auth-Key"] = self.urlhaus_api_key
+
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(endpoint, data={"url": url})
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.post(endpoint, data={"url": url}, headers=headers)
                 if response.status_code == 200:
                     data = response.json()
                     query_status = data.get("query_status")
@@ -36,22 +42,27 @@ class ThreatIntelService:
                         result["threat"] = data.get("threat")
                         result["tags"] = data.get("tags")
                         result["urlhaus_reference"] = data.get("urlhaus_reference")
-                    elif query_status in ["no_results", "invalid_url", "skipped"]:
-                        result["flagged"] = False
                     else:
                         result["flagged"] = False
+                elif response.status_code in [401, 403]:
+                    # Unauthenticated or rate-limited URLhaus endpoint; log debug and treat as unflagged
+                    logger.debug(f"URLhaus API returned {response.status_code}. Skipping feed.")
+                    result["status"] = "unauthenticated"
+                    result["flagged"] = False
                 else:
                     result["status"] = f"http_{response.status_code}"
-                    logger.warning(f"URLhaus API returned status code {response.status_code}")
+                    result["flagged"] = False
         except Exception as e:
-            logger.warning(f"Error querying URLhaus API: {e}")
+            logger.debug(f"URLhaus query error: {e}")
             result["status"] = "exception"
+            result["flagged"] = False
+
         return result
 
     async def check_google_safebrowsing(self, url: str) -> Dict[str, Any]:
         """
         Query Google Safe Browsing API v4.
-        Gracefully mark unconfigured if GOOGLE_SAFE_BROWSING_API_KEY is absent.
+        Gracefully marks unconfigured if GOOGLE_SAFE_BROWSING_API_KEY is absent.
         """
         result = {
             "queried": False,
@@ -60,7 +71,6 @@ class ThreatIntelService:
             "matches": []
         }
         if not self.google_api_key:
-            logger.warning("GOOGLE_SAFE_BROWSING_API_KEY is not configured. Skipping Safe Browsing check.")
             return result
 
         result["queried"] = True
@@ -87,7 +97,7 @@ class ThreatIntelService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 response = await client.post(api_endpoint, json=payload)
                 if response.status_code == 200:
                     data = response.json()
@@ -100,17 +110,17 @@ class ThreatIntelService:
                         result["status"] = "clean"
                 else:
                     result["status"] = f"http_{response.status_code}"
-                    logger.warning(f"Google Safe Browsing API returned status code {response.status_code}: {response.text}")
+                    result["flagged"] = False
         except Exception as e:
-            logger.warning(f"Error querying Google Safe Browsing API: {e}")
+            logger.debug(f"Google Safe Browsing error: {e}")
             result["status"] = "exception"
+            result["flagged"] = False
 
         return result
 
     async def lookup(self, url: str) -> Dict[str, Any]:
         """
-        Aggregating results from URLhaus and Google Safe Browsing,
-        setting flagged: bool, threat_summary: list[str], and structured source details.
+        Aggregate results from URLhaus and Google Safe Browsing.
         """
         urlhaus_res = await self.check_urlhaus(url)
         gsb_res = await self.check_google_safebrowsing(url)
