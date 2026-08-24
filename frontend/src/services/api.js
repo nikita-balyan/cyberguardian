@@ -49,6 +49,15 @@ export const scanMessage = async (message) => {
     throw handleApiError(error)
   }
 }
+export const scanBatch = async (items, scanType = 'url') => {
+  try {
+    const response = await apiClient.post('/scan/batch', { items, scan_type: scanType })
+    return response.data
+  } catch (error) {
+    throw handleApiError(error)
+  }
+}
+
 
 export const getScanHistory = async () => {
   try {

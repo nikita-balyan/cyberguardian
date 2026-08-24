@@ -68,9 +68,29 @@ class ScanAuditLogResponse(BaseModel):
     evidence: dict
     created_at: datetime
 
+class BatchScanRequest(BaseModel):
+    items: List[str]
+    scan_type: str = "url"  # "url" | "message"
+
+class BatchScanItemResult(BaseModel):
+    target: str
+    risk_score: int
+    risk_level: str
+    flags_count: int
+    summary: str
+    threat_intel_flagged: bool
+
+class BatchScanResponse(BaseModel):
+    total_items: int
+    high_risk_count: int
+    medium_risk_count: int
+    low_risk_count: int
+    results: List[BatchScanItemResult]
+
 class HistoryResponse(BaseModel):
     total_scans: int
     risk_breakdown: dict
     scans: List[ScanAuditLogResponse]
+
 
 

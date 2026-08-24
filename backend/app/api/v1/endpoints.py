@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Response
 from sqlalchemy.orm import Session
 import inspect
@@ -9,8 +10,11 @@ from app.models.schemas import (
     MessageScanRequest,
     MessageScanResponse,
     HistoryResponse,
+    BatchScanRequest,
+    BatchScanItemResult,
+    BatchScanResponse,
 )
-from app.models.database import get_db, ScanAuditLog
+from app.models.database import get_db, ScanAuditLog, SessionLocal
 from app.analyzers.url_analyzer import analyze_url
 from app.analyzers.qr_analyzer import analyze_qr_code
 from app.analyzers.text_analyzer import analyze_message_text
@@ -179,6 +183,119 @@ def get_scan_history(db: Session = Depends(get_db)):
             status_code=500,
             detail=f"Internal server error retrieving scan history: {str(e)}",
         )
+
+@router.post("/scan/batch", response_model=BatchScanResponse)
+async def scan_batch(request: BatchScanRequest):
+    """
+    Perform a batch / bulk multi-target threat scan on up to 50 items (URLs or messages)
+    concurrently using asyncio with semaphore limiting.
+    """
+    cleaned_items = [item.strip() for item in request.items if item and item.strip()]
+    if len(cleaned_items) > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 50 items allowed per batch scan."
+        )
+    if not cleaned_items:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid items provided for batch scan."
+        )
+
+    semaphore = asyncio.Semaphore(10)
+
+    async def process_single_item(item: str) -> BatchScanItemResult:
+        async with semaphore:
+            db_session = SessionLocal()
+            try:
+                if request.scan_type == "url":
+                    evidence = analyze_url(item)
+                    if inspect.isawaitable(evidence):
+                        evidence = await evidence
+                    risk_assessment = calculate_url_risk(evidence)
+                    if inspect.isawaitable(risk_assessment):
+                        risk_assessment = await risk_assessment
+
+                    threat_intel = getattr(evidence, "threat_intel", None)
+                    threat_intel_flagged = False
+                    if isinstance(threat_intel, dict):
+                        threat_intel_flagged = threat_intel.get("flagged", False)
+                    elif hasattr(threat_intel, "flagged"):
+                        threat_intel_flagged = threat_intel.flagged
+                    threat_intel_flagged = bool(evidence.safe_browsing_hit or threat_intel_flagged)
+
+                else:  # message
+                    evidence = analyze_message_text(item)
+                    if inspect.isawaitable(evidence):
+                        evidence = await evidence
+                    risk_assessment = calculate_message_risk(evidence)
+                    if inspect.isawaitable(risk_assessment):
+                        risk_assessment = await risk_assessment
+
+                    threat_intel_flagged = any(
+                        bool(
+                            e.safe_browsing_hit or
+                            (e.threat_intel and (
+                                e.threat_intel.get("flagged") if isinstance(e.threat_intel, dict) else getattr(e.threat_intel, "flagged", False)
+                            ))
+                        )
+                        for e in evidence.url_evidences
+                    )
+
+                explanation = ai_explainer.generate_explanation(
+                    evidence.model_dump(), risk_assessment.model_dump()
+                )
+
+                audit_log = ScanAuditLog(
+                    scan_type=request.scan_type,
+                    target=item,
+                    risk_level=risk_assessment.level,
+                    risk_score=risk_assessment.score,
+                    summary=explanation.summary,
+                    evidence=evidence.model_dump(),
+                    created_at=datetime.now(timezone.utc),
+                )
+                db_session.add(audit_log)
+                db_session.commit()
+
+                return BatchScanItemResult(
+                    target=item,
+                    risk_score=risk_assessment.score,
+                    risk_level=risk_assessment.level,
+                    flags_count=len(risk_assessment.triggers),
+                    summary=explanation.summary,
+                    threat_intel_flagged=threat_intel_flagged
+                )
+            except Exception as e:
+                db_session.rollback()
+                return BatchScanItemResult(
+                    target=item,
+                    risk_score=0,
+                    risk_level="LOW",
+                    flags_count=1,
+                    summary=f"Analysis error: {str(e)}",
+                    threat_intel_flagged=False
+                )
+            finally:
+                db_session.close()
+
+    tasks = [process_single_item(item) for item in cleaned_items]
+    results = await asyncio.gather(*tasks)
+
+    # Sort results by risk_score descending (highest risk first)
+    results = sorted(results, key=lambda r: r.risk_score, reverse=True)
+
+    high_risk_count = sum(1 for r in results if r.risk_level in ["HIGH", "CRITICAL"])
+    medium_risk_count = sum(1 for r in results if r.risk_level == "MEDIUM")
+    low_risk_count = sum(1 for r in results if r.risk_level == "LOW")
+
+    return BatchScanResponse(
+        total_items=len(results),
+        high_risk_count=high_risk_count,
+        medium_risk_count=medium_risk_count,
+        low_risk_count=low_risk_count,
+        results=results
+    )
 
 @router.post("/export/pdf")
 async def export_pdf(scan_data: dict):
