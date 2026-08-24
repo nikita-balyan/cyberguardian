@@ -20,3 +20,4 @@ frontend/.vite/
 # SQLite local database
 *.db
 cyberguardian.db
+*.sqlite3
