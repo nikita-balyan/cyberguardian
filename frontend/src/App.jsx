@@ -4,7 +4,10 @@ import UrlScanner from './components/UrlScanner'
 import QrScanner from './components/QrScanner'
 import MessageScanner from './components/MessageScanner'
 import HistoryTab from './components/HistoryTab'
-import { Globe, QrCode, MessageSquare, Shield, Clock } from 'lucide-react'
+import { Globe, QrCode, MessageSquare, Shield, Clock, Layers } from 'lucide-react'
+
+
+import BatchScanner from './components/BatchScanner'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('url')
@@ -78,6 +81,18 @@ export default function App() {
               <Clock className="w-4 h-4" />
               <span>Scan History & Analytics</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('batch')}
+              className={`flex items-center space-x-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                activeTab === 'batch'
+                  ? 'bg-orange-600 text-white shadow-lg shadow-orange-600/25'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>Batch Scanner</span>
+            </button>
           </div>
         </div>
 
@@ -87,6 +102,7 @@ export default function App() {
           {activeTab === 'qr' && <QrScanner />}
           {activeTab === 'message' && <MessageScanner />}
           {activeTab === 'history' && <HistoryTab />}
+          {activeTab === 'batch' && <BatchScanner />}
         </div>
       </main>
 
