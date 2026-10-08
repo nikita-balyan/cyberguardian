@@ -45,12 +45,15 @@ async def scan_url(request: URLScanRequest, db: Session = Depends(get_db)):
         )
 
         audit_log = ScanAuditLog(
-            scan_type="url",
+            modality="url",
             target=request.url,
-            risk_level=risk_assessment.level,
-            risk_score=risk_assessment.score,
-            summary=explanation.summary,
-            evidence=evidence.model_dump(),
+            severity_level=risk_assessment.level,
+            composite_risk_score=risk_assessment.score,
+            heuristic_score=float(risk_assessment.score),
+            ml_probability=float(evidence.ml_probability) if evidence.ml_probability is not None else 0.0,
+            intel_feed_hits=1 if evidence.safe_browsing_hit or (evidence.threat_intel and evidence.threat_intel.get("flagged")) else 0,
+            ai_explanation=explanation.summary,
+            evidence_json=evidence.model_dump(),
             created_at=datetime.now(timezone.utc),
         )
         db.add(audit_log)
@@ -84,13 +87,18 @@ async def scan_qr(file: UploadFile = File(...), db: Session = Depends(get_db)):
         )
 
         target_str = evidence.extracted_text if evidence.extracted_text else (file.filename or "Uploaded QR Code")
+        url_ev = evidence.url_evidence
+        ml_prob = float(url_ev.ml_probability) if url_ev and url_ev.ml_probability is not None else 0.0
         audit_log = ScanAuditLog(
-            scan_type="qr",
+            modality="qr",
             target=target_str,
-            risk_level=risk_assessment.level,
-            risk_score=risk_assessment.score,
-            summary=explanation.summary,
-            evidence=evidence.model_dump(),
+            severity_level=risk_assessment.level,
+            composite_risk_score=risk_assessment.score,
+            heuristic_score=float(risk_assessment.score),
+            ml_probability=ml_prob,
+            intel_feed_hits=1 if url_ev and (url_ev.safe_browsing_hit or (url_ev.threat_intel and url_ev.threat_intel.get("flagged"))) else 0,
+            ai_explanation=explanation.summary,
+            evidence_json=evidence.model_dump(),
             created_at=datetime.now(timezone.utc),
         )
         db.add(audit_log)
@@ -121,13 +129,25 @@ async def scan_message(request: MessageScanRequest, db: Session = Depends(get_db
             evidence.model_dump(), risk_assessment.model_dump()
         )
 
+        max_ml_prob = 0.0
+        intel_hits = 0
+        if evidence.url_evidences:
+            for url_ev in evidence.url_evidences:
+                if url_ev.ml_probability is not None and url_ev.ml_probability > max_ml_prob:
+                    max_ml_prob = float(url_ev.ml_probability)
+                if url_ev.safe_browsing_hit or (url_ev.threat_intel and url_ev.threat_intel.get("flagged")):
+                    intel_hits += 1
+
         audit_log = ScanAuditLog(
-            scan_type="message",
+            modality="text",
             target=request.message,
-            risk_level=risk_assessment.level,
-            risk_score=risk_assessment.score,
-            summary=explanation.summary,
-            evidence=evidence.model_dump(),
+            severity_level=risk_assessment.level,
+            composite_risk_score=risk_assessment.score,
+            heuristic_score=float(risk_assessment.score),
+            ml_probability=max_ml_prob,
+            intel_feed_hits=intel_hits,
+            ai_explanation=explanation.summary,
+            evidence_json=evidence.model_dump(),
             created_at=datetime.now(timezone.utc),
         )
         db.add(audit_log)
@@ -277,13 +297,18 @@ async def scan_batch(request: BatchScanRequest):
 
                 # Persist to database history
                 try:
+                    url_ev = evidence if hasattr(evidence, "ml_probability") else None
+                    ml_prob = float(url_ev.ml_probability) if url_ev and url_ev.ml_probability is not None else 0.0
                     audit_log = ScanAuditLog(
-                        scan_type=request.scan_type,
+                        modality=request.scan_type,
                         target=item,
-                        risk_level=risk_assessment.level,
-                        risk_score=risk_assessment.score,
-                        summary=summary_text,
-                        evidence=evidence_data,
+                        severity_level=risk_assessment.level,
+                        composite_risk_score=risk_assessment.score,
+                        heuristic_score=float(risk_assessment.score),
+                        ml_probability=ml_prob,
+                        intel_feed_hits=1 if threat_intel_flagged else 0,
+                        ai_explanation=summary_text,
+                        evidence_json=evidence_data,
                         created_at=datetime.now(timezone.utc),
                     )
                     db_session.add(audit_log)

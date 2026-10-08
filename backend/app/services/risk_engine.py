@@ -73,13 +73,19 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     cat1_score = 0
     threat_intel = getattr(evidence, "threat_intel", None)
     threat_intel_flagged = False
+    intel_feed_hits = 0
     if isinstance(threat_intel, dict):
         threat_intel_flagged = threat_intel.get("flagged", False)
+        if threat_intel_flagged:
+            intel_feed_hits = 1
     elif hasattr(threat_intel, "flagged"):
         threat_intel_flagged = threat_intel.flagged
+        if threat_intel_flagged:
+            intel_feed_hits = 1
 
     if evidence.safe_browsing_hit or threat_intel_flagged:
         cat1_score += 60
+        intel_feed_hits = max(1, intel_feed_hits)
         if evidence.safe_browsing_hit:
             triggers.append("Safe Browsing threat intelligence hit (+60)")
         if threat_intel_flagged:
@@ -128,28 +134,43 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
         other_score += 15
         triggers.append(f"Excessive HTTP redirects ({evidence.redirect_count} > 2) (+15)")
 
-    # Total Score Calculation
-    total_score = cat1_score + cat2_score + cat3_score + other_score
+    # Heuristic score calculation
+    heuristic_score = cat1_score + cat2_score + cat3_score + other_score
+    heuristic_score = max(0, min(100, heuristic_score))
+
+    # ML Probability and Score
+    ml_prob = getattr(evidence, "ml_probability", None)
+    if ml_prob is None:
+        ml_prob = 0.1 if heuristic_score < 20 else 0.8
+    ml_score = int(ml_prob * 100)
+    
+    # Only add ML probability trigger if there's a non-zero probability
+    if ml_prob > 0:
+        triggers.append(f"Machine Learning secondary classifier phishing probability: {ml_prob:.2f} (score: {ml_score}/100)")
+
+    # Composite Risk Score Calculation
+    composite_score = int(0.4 * heuristic_score + 0.4 * ml_score + 0.2 * (intel_feed_hits * 33))
 
     # Override: If Safe Browsing hit or threat intel flagged is true, minimum score is pinned to 95 (CRITICAL)
     if evidence.safe_browsing_hit or threat_intel_flagged:
-        total_score = max(total_score, 95)
+        composite_score = max(composite_score, 95)
 
-    # Clamp total score between 0 and 100
-    total_score = max(0, min(100, total_score))
+    # Clamp composite score between 0 and 100
+    composite_score = max(0, min(100, composite_score))
 
     # Determine Level
-    if total_score >= 80:
+    if composite_score >= 80:
         level = 'CRITICAL'
-    elif total_score >= 60:
+    elif composite_score >= 60:
         level = 'HIGH'
-    elif total_score >= 30:
+    elif composite_score >= 30:
         level = 'MEDIUM'
     else:
         level = 'LOW'
 
     return RiskAssessment(
-        score=total_score,
+        score=composite_score,
         level=level,
         triggers=triggers
     )
+

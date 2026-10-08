@@ -10,6 +10,7 @@ import whois
 
 from ..models.schemas import URLEvidence
 from ..services.threat_intel import ThreatIntelService
+from ..ml.inference import predict_phishing_probability
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,9 @@ async def analyze_url(url: str) -> URLEvidence:
     threat_intel = await threat_intel_service.lookup(final_url)
     safe_browsing_hit = threat_intel.get("sources", {}).get("google_safebrowsing", {}).get("flagged", False) or threat_intel.get("flagged", False)
 
+    # 9. Secondary ML Phishing Probability
+    ml_probability = predict_phishing_probability(final_url)
+
     return URLEvidence(
         domain_age_days=domain_age_days,
         ssl_valid=ssl_valid,
@@ -165,6 +169,8 @@ async def analyze_url(url: str) -> URLEvidence:
         suspicious_tld=suspicious_tld,
         brand_impersonation=brand_impersonation,
         safe_browsing_hit=safe_browsing_hit,
-        threat_intel=threat_intel
+        threat_intel=threat_intel,
+        ml_probability=ml_probability
     )
+
 

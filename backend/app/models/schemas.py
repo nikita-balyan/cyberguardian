@@ -1,7 +1,9 @@
 from datetime import datetime
+from uuid import UUID
+from typing import List, Optional, Union
 from pydantic import BaseModel, ConfigDict
-from typing import List, Optional
 from app.services.ai_explainer import AIExplanation
+
 
 class URLScanRequest(BaseModel):
     url: str
@@ -17,6 +19,7 @@ class URLEvidence(BaseModel):
     brand_impersonation: bool = False
     safe_browsing_hit: bool = False
     threat_intel: Optional[dict] = None
+    ml_probability: Optional[float] = None
 
 class RiskAssessment(BaseModel):
     score: int
@@ -59,14 +62,22 @@ class MessageScanResponse(BaseModel):
 class ScanAuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
-    scan_type: str
+    id: Optional[Union[int, UUID, str]] = None
+    scan_type: Optional[str] = None
+    modality: Optional[str] = None
     target: str
-    risk_level: str
-    risk_score: int
+    risk_level: Optional[str] = None
+    severity_level: Optional[str] = None
+    risk_score: Optional[int] = None
+    composite_risk_score: Optional[int] = None
+    heuristic_score: Optional[float] = None
+    ml_probability: Optional[float] = None
     summary: Optional[str] = None
-    evidence: dict
+    ai_explanation: Optional[str] = None
+    evidence: Optional[dict] = None
+    evidence_json: Optional[dict] = None
     created_at: datetime
+
 
 class BatchScanRequest(BaseModel):
     items: List[str]

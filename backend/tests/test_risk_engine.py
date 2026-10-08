@@ -12,7 +12,8 @@ def test_clean_url_risk():
         is_ip_address=False,
         suspicious_tld=False,
         brand_impersonation=False,
-        safe_browsing_hit=False
+        safe_browsing_hit=False,
+        ml_probability=0.0
     )
     assessment = calculate_url_risk(evidence)
     assert assessment.score == 0
@@ -29,7 +30,8 @@ def test_malicious_safe_browsing_override():
         is_ip_address=False,
         suspicious_tld=False,
         brand_impersonation=False,
-        safe_browsing_hit=True
+        safe_browsing_hit=True,
+        ml_probability=0.0
     )
     assessment = calculate_url_risk(evidence)
     assert assessment.score >= 95
@@ -46,13 +48,15 @@ def test_risk_scoring_accumulations():
         is_ip_address=True, # +20 pts
         suspicious_tld=True, # +10 pts
         brand_impersonation=True, # +25 pts
-        safe_browsing_hit=False
+        safe_browsing_hit=False,
+        ml_probability=0.0
     )
     # Cat 2 (Age < 14): 25
     # Cat 3 (Brand): 25
     # Independent: SSL (15) + TLD (10) + IP (20) + Redirects (15) = 60
-    # Total = 25 + 25 + 60 = 110 -> clamped to 100
+    # Total heuristic = 25 + 25 + 60 = 110 -> clamped to 100
+    # Composite = 0.4*100 + 0.4*0 + 0.2*0 = 40
     assessment = calculate_url_risk(evidence)
-    assert assessment.score == 100
-    assert assessment.level == 'CRITICAL'
+    assert assessment.score == 40
+    assert assessment.level == 'MEDIUM'
     assert len(assessment.triggers) >= 5
