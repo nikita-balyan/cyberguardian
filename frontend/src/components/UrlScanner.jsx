@@ -4,6 +4,7 @@ import RiskMeter from './RiskMeter'
 import AiExplanationCard from './AiExplanationCard'
 import EvidenceInspector from './EvidenceInspector'
 import ReportExport from './ReportExport'
+import TelemetryBreakdown from './TelemetryBreakdown'
 import { scanUrl } from '../services/api'
 
 export default function UrlScanner() {
@@ -114,8 +115,10 @@ export default function UrlScanner() {
             score={result.risk_assessment.score}
             level={result.risk_assessment.level}
             triggers={result.risk_assessment.triggers}
+            mlProbability={result.evidence.ml_probability}
           />
-          <AiExplanationCard explanation={result.explanation} />
+          <TelemetryBreakdown evidence={result.evidence} />
+          <AiExplanationCard explanation={result.explanation} scanData={result} />
           <EvidenceInspector evidence={result.evidence} />
           <ReportExport scanData={result} />
         </div>

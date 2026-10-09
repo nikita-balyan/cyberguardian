@@ -11,6 +11,7 @@ import whois
 from ..models.schemas import URLEvidence
 from ..services.threat_intel import ThreatIntelService
 from ..ml.inference import predict_phishing_probability
+from ..ml.feature_extractor import extract_url_features
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,9 @@ async def analyze_url(url: str) -> URLEvidence:
     # 9. Secondary ML Phishing Probability
     ml_probability = predict_phishing_probability(final_url)
 
+    # 10. Extract 12 lexical features for telemetry
+    lexical_features = extract_url_features(final_url)
+
     return URLEvidence(
         domain_age_days=domain_age_days,
         ssl_valid=ssl_valid,
@@ -170,7 +174,8 @@ async def analyze_url(url: str) -> URLEvidence:
         brand_impersonation=brand_impersonation,
         safe_browsing_hit=safe_browsing_hit,
         threat_intel=threat_intel,
-        ml_probability=ml_probability
+        ml_probability=ml_probability,
+        lexical_features=lexical_features,
     )
 
 

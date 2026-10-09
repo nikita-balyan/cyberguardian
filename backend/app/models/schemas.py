@@ -20,6 +20,7 @@ class URLEvidence(BaseModel):
     safe_browsing_hit: bool = False
     threat_intel: Optional[dict] = None
     ml_probability: Optional[float] = None
+    lexical_features: Optional[dict] = None
 
 class RiskAssessment(BaseModel):
     score: int

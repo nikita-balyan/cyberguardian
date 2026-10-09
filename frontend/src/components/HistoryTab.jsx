@@ -41,28 +41,40 @@ export default function HistoryTab() {
     fetchHistory()
   }, [])
 
+  // Maps any persisted schema (legacy Supabase or current) into a single shape.
+  const normalizeScan = (scan) => ({
+    id: scan.id,
+    scanType: scan.scan_type || scan.modality || 'unknown',
+    target: scan.target,
+    riskLevel: (scan.risk_level || scan.severity_level || 'LOW').toUpperCase(),
+    riskScore: scan.risk_score ?? scan.composite_risk_score ?? 0,
+    heuristicScore: scan.heuristic_score,
+    mlProbability: scan.ml_probability,
+    summary: scan.summary || scan.ai_explanation || '',
+    evidence: scan.evidence || scan.evidence_json || null,
+    createdAt: scan.created_at,
+  })
+
+  // Distinct severity color encodings:
+  // LOW -> Green, MEDIUM -> Yellow, HIGH -> Orange, CRITICAL -> Red
+  const SEVERITY_STYLES = {
+    LOW: { cls: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400', Icon: CheckCircle2 },
+    MEDIUM: { cls: 'bg-amber-500/15 border-amber-500/30 text-amber-400', Icon: AlertTriangle },
+    HIGH: { cls: 'bg-orange-500/15 border-orange-500/30 text-orange-400', Icon: AlertTriangle },
+    CRITICAL: { cls: 'bg-rose-500/15 border-rose-500/30 text-rose-400', Icon: AlertOctagon },
+  }
+
   const getRiskBadge = (level, score) => {
-    const lvl = level?.toUpperCase()
-    if (lvl === 'CRITICAL' || lvl === 'HIGH') {
-      return (
-        <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/15 border border-rose-500/30 text-rose-400">
-          <AlertOctagon className="w-3 h-3" />
-          <span>{level} ({score})</span>
-        </span>
-      )
+    const lvl = (level || 'LOW').toUpperCase()
+    const { cls, Icon } = SEVERITY_STYLES[lvl] || {
+      cls: 'bg-slate-500/15 border-slate-500/30 text-slate-400',
+      Icon: Shield,
     }
-    if (lvl === 'MEDIUM') {
-      return (
-        <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/15 border border-amber-500/30 text-amber-400">
-          <AlertTriangle className="w-3 h-3" />
-          <span>{level} ({score})</span>
-        </span>
-      )
-    }
+    const scoreLabel = score !== undefined && score !== null ? ` (${score})` : ''
     return (
-      <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
-        <CheckCircle2 className="w-3 h-3" />
-        <span>{level || 'LOW'} ({score})</span>
+      <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold border ${cls}`}>
+        <Icon className="w-3 h-3" />
+        <span>{lvl}{scoreLabel}</span>
       </span>
     )
   }
@@ -254,7 +266,8 @@ export default function HistoryTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {historyData?.scans?.map((scan) => {
+                {historyData?.scans?.map((rawScan) => {
+                  const scan = normalizeScan(rawScan)
                   const isExpanded = expandedRow === scan.id
                   return (
                     <React.Fragment key={scan.id}>
@@ -264,14 +277,14 @@ export default function HistoryTab() {
                       >
                         <td className="py-3.5 px-4 font-mono text-slate-500">#{scan.id}</td>
                         <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">
-                          {formatDate(scan.created_at)}
+                          {formatDate(scan.createdAt)}
                         </td>
-                        <td className="py-3.5 px-4">{getTypeIcon(scan.scan_type)}</td>
+                        <td className="py-3.5 px-4">{getTypeIcon(scan.scanType)}</td>
                         <td className="py-3.5 px-4 font-mono text-slate-200 max-w-xs truncate" title={scan.target}>
                           {scan.target || '<empty>'}
                         </td>
                         <td className="py-3.5 px-4">
-                          {getRiskBadge(scan.risk_level, scan.risk_score)}
+                          {getRiskBadge(scan.riskLevel, scan.riskScore)}
                         </td>
                         <td className="py-3.5 px-4 text-right text-slate-500">
                           <button
@@ -297,6 +310,28 @@ export default function HistoryTab() {
                               <p className="text-slate-200 text-xs bg-slate-900/90 p-3 rounded-xl border border-slate-800">
                                 {scan.summary || 'No summary available.'}
                               </p>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Severity</span>
+                                <span className="text-sm font-bold text-slate-200">{scan.riskLevel}</span>
+                              </div>
+                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Composite Score</span>
+                                <span className="text-sm font-bold text-slate-200">{scan.riskScore}/100</span>
+                              </div>
+                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Heuristic Score</span>
+                                <span className="text-sm font-bold text-slate-200">
+                                  {scan.heuristicScore !== null && scan.heuristicScore !== undefined ? scan.heuristicScore : 'N/A'}
+                                </span>
+                              </div>
+                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
+                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">ML Probability</span>
+                                <span className="text-sm font-bold text-slate-200">
+                                  {scan.mlProbability !== null && scan.mlProbability !== undefined ? `${(scan.mlProbability * 100).toFixed(1)}%` : 'N/A'}
+                                </span>
+                              </div>
                             </div>
                             {scan.evidence && (
                               <div>

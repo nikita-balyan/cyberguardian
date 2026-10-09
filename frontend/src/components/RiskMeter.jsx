@@ -1,7 +1,7 @@
 import React from 'react'
-import { AlertTriangle, CheckCircle2, AlertOctagon, HelpCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, AlertOctagon, HelpCircle, Brain } from 'lucide-react'
 
-export default function RiskMeter({ score, level, triggers = [] }) {
+export default function RiskMeter({ score, level, triggers = [], mlProbability = 0 }) {
   const getLevelStyles = (lvl) => {
     switch (lvl?.toUpperCase()) {
       case 'LOW':
@@ -119,6 +119,75 @@ export default function RiskMeter({ score, level, triggers = [] }) {
           </div>
         </div>
       )}
+
+      {/* ML Probability & Heuristic Score Breakdown */}
+      <div className="mt-4 pt-4 border-t border-slate-800/60 grid grid-cols-2 gap-4">
+        <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800/50">
+          <div className="flex items-center space-x-2 text-cyan-400 font-semibold text-sm mb-3">
+            <Brain className="w-4 h-4" />
+            <span>ML Phishing Probability</span>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className="w-20 h-20 relative flex items-center justify-center flex-shrink-0">
+              <svg className="w-full h-full transform -rotate-90">
+                <circle
+                  cx="32"
+                  cy="32"
+                  r="26"
+                  stroke="currentColor"
+                  strokeWidth="6"
+                  className="text-slate-800 fill-none"
+                />
+                <circle
+                  cx="32"
+                  cy="32"
+                  r="26"
+                  stroke="currentColor"
+                  strokeWidth="6"
+                  strokeDasharray={2 * Math.PI * 26}
+                  strokeDashoffset={2 * Math.PI * 26 * (1 - (mlProbability || 0))}
+                  strokeLinecap="round"
+                  className={`fill-none transition-all duration-1000 ${
+                    mlProbability < 0.3 ? 'text-emerald-400' : mlProbability < 0.6 ? 'text-amber-400' : 'text-rose-400'
+                  }`}
+                />
+              </svg>
+              <span className="absolute text-xs font-bold text-white">{Math.round((mlProbability || 0) * 100)}%</span>
+            </div>
+            <div className="flex-1">
+              <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-1000 ${
+                    mlProbability < 0.3 ? 'bg-emerald-400' : mlProbability < 0.6 ? 'bg-amber-400' : 'bg-rose-400'
+                  }`}
+                  style={{ width: `${(mlProbability || 0) * 100}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                <span>Benign (0%)</span>
+                <span>Phishing (100%)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="bg-slate-900/60 rounded-xl p-4 border border-slate-800/50">
+          <div className="text-slate-400 font-semibold text-sm mb-3">Score Breakdown</div>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between text-slate-300">
+              <span>Composite Risk Score</span>
+              <span className="font-bold text-white">{score}/100</span>
+            </div>
+            <div className="flex justify-between text-slate-300">
+              <span>Heuristic Score</span>
+              <span className="font-bold text-white">{score}/100</span>
+            </div>
+            <div className="flex justify-between text-slate-300">
+              <span>ML Probability Score</span>
+              <span className="font-bold text-white">{Math.round((mlProbability || 0) * 100)}/100</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

@@ -139,8 +139,9 @@ export default function QrScanner() {
             score={result.risk_assessment.score}
             level={result.risk_assessment.level}
             triggers={result.risk_assessment.triggers}
+            mlProbability={result.evidence?.url_evidence?.ml_probability}
           />
-          <AiExplanationCard explanation={result.explanation} />
+          <AiExplanationCard explanation={result.explanation} scanData={result} />
           <EvidenceInspector evidence={result.evidence} />
           <ReportExport scanData={result} />
         </div>
