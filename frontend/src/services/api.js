@@ -1,8 +1,6 @@
 import axios from 'axios'
 
-const API_BASE_URL = 'http://127.0.0.1:8000'
-  ? 'http://127.0.0.1:8000/api/v1'
-  : '/api/v1'
+const API_BASE_URL = 'http://127.0.0.1:8000/api/v1'
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -13,7 +11,7 @@ const apiClient = axios.create({
 })
 
 export const checkHealth = async () => {
-  const response = await apiClient.get('/api/v1/health')
+  const response = await apiClient.get('/health')
   return response.data
 }
 
@@ -49,6 +47,7 @@ export const scanMessage = async (message) => {
     throw handleApiError(error)
   }
 }
+
 export const scanBatch = async (items, scanType = 'url') => {
   try {
     const response = await apiClient.post('/scan/batch', { items, scan_type: scanType })
@@ -57,7 +56,6 @@ export const scanBatch = async (items, scanType = 'url') => {
     throw handleApiError(error)
   }
 }
-
 
 export const getScanHistory = async () => {
   try {
@@ -83,7 +81,7 @@ const handleApiError = (error) => {
   if (error.response) {
     return new Error(error.response.data?.detail || `Server error: ${error.response.status}`)
   } else if (error.request) {
-    return new Error('Unable to reach CyberGuardian backend. Please ensure FastAPI server is running at http://127.0.0.1:8001.')
+    return new Error('Unable to reach CyberGuardian backend. Please ensure FastAPI server is running at http://127.0.0.1:8000.')
   } else {
     return new Error(error.message || 'An unexpected error occurred during scan.')
   }

@@ -25,3 +25,7 @@ app.include_router(endpoints.router, prefix="/api/v1")
 @app.get("/")
 async def root():
     return {"message": "Welcome to CyberGuardian API"}
+
+@app.get("/")
+def read_root():
+    return {"message": "CyberGuardian API is running", "docs": "/docs"}
