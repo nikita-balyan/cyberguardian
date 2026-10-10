@@ -21,3 +21,4 @@ frontend/.vite/
 *.db
 cyberguardian.db
 *.sqlite3
+data/

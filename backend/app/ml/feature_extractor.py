@@ -89,3 +89,11 @@ def extract_url_features(url: str) -> dict:
         "https_status": 1 if scheme == 'https' else 0,
     }
     return {k: features[k] for k in FEATURE_ORDER}
+
+def host_only_url(url: str) -> str:
+    """Reduce a URL to 'http://<hostname>': no path, query, port, scheme, or leading www.
+    The training data is lopsided on paths and schemes, so the ML model only sees the host."""
+    _, hostname, _ = _parse(str(url).strip())
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return "http://" + hostname if hostname else ""

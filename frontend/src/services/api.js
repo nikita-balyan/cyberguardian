@@ -50,7 +50,7 @@ export const scanMessage = async (message) => {
 
 export const scanBatch = async (items, scanType = 'url') => {
   try {
-    const response = await apiClient.post('/scan/batch', { items, scan_type: scanType })
+    const response = await apiClient.post('/scan/batch', { items, scan_type: scanType }, { timeout: 180000 })
     return response.data
   } catch (error) {
     throw handleApiError(error)

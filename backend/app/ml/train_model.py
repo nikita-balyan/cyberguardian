@@ -1,26 +1,26 @@
-"""
+r"""
 Train the CyberGuardian URL phishing classifier on real data.
 
-Run from the repo root (after downloading datasets, see below):
+Run from the repo root:
 
-  python -m backend.app.ml.train_model \
-      --phishing data/phishtank.csv \
-      --benign data/benign_urls.txt \
-      --holdout-phishing data/urlhaus.csv
+  python -m backend.app.ml.train_model ^
+      --phishing data\phishing_urls.txt --benign data\benign_urls.txt ^
+      --holdout-phishing data\openphish.txt --host-only
 
 Input files (any mix):
   - .txt            one URL per line ('#' lines are ignored)
-  - .csv / .tsv     a 'url' column if there is one (PhishTank, URLhaus exports),
-                    otherwise the column that looks most like URLs
+  - .csv / .tsv     a 'url' column if there is one, otherwise the column that
+                    looks most like URLs
 
-IMPORTANT: benign data should be FULL URLs (with scheme and path), like the
-phishing data. A plain domain list (e.g. Tranco) teaches the model that
-"has a path" means phishing. The shape report below warns about this.
+--host-only reduces every URL to 'http://<hostname>' before training. Use it
+when one class has paths or schemes the other doesn't (a common dataset flaw).
+At inference time, call host_only_url() on the URL before predicting.
 """
 import argparse
 import json
 import os
 import random
+import re
 import shutil
 from datetime import datetime, timezone
 from io import StringIO
@@ -43,17 +43,19 @@ from sklearn.model_selection import GroupShuffleSplit
 from xgboost import XGBClassifier
 
 try:
-    from backend.app.ml.feature_extractor import FEATURE_ORDER, extract_url_features
+    from backend.app.ml.feature_extractor import FEATURE_ORDER, extract_url_features, host_only_url
 except ImportError:  # running from inside backend/
-    from app.ml.feature_extractor import FEATURE_ORDER, extract_url_features
+    from app.ml.feature_extractor import FEATURE_ORDER, extract_url_features, host_only_url
 
 try:
     import tldextract
-    _TLD = tldextract.TLDExtract(suffix_list_urls=())
+    # include_psl_private_domains: 'x.vercel.app' and 'y.vercel.app' are different sites
+    _TLD = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
 except Exception:  # pragma: no cover
     _TLD = None
 
 DEFAULT_OUT = os.path.join(os.path.dirname(__file__), "phishing_xgb_v1.pkl")
+_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 
 # --------------------------------------------------------------------------- #
@@ -128,12 +130,18 @@ def clean(urls) -> list:
         u = u.strip().strip('"')
         if not u or len(u) > 2048:
             continue
+        if not _SCHEME.match(u):
+            u = "http://" + u
         key = u.lower()
         if key in seen:
             continue
         seen.add(key)
         out.append(u)
     return out
+
+
+def to_hosts(urls) -> list:
+    return clean([host_only_url(u) for u in urls])
 
 
 def featurize(urls, label: int) -> pd.DataFrame:
@@ -172,10 +180,10 @@ def shape_report(df: pd.DataFrame):
               f"has_path={s['has_path']:.0%}  mean_url_length={s['mean_len']:.0f}")
     if abs(stats["benign"]["https"] - stats["phishing"]["https"]) > 0.3:
         print("WARNING: https share differs a lot between classes. The model may learn "
-              "'http = phishing'. Compare the 'without https_status' results below.")
+              "'http = phishing'. Try --host-only, or compare the 'without https_status' row below.")
     if abs(stats["benign"]["has_path"] - stats["phishing"]["has_path"]) > 0.3:
-        print("WARNING: one class mostly has paths and the other doesn't (a domain-only "
-              "list?). The model may learn 'has path = phishing'. Use full benign URLs.")
+        print("WARNING: one class mostly has paths and the other doesn't. The model may learn "
+              "'has path = phishing'. Use --host-only, or get benign URLs with real paths.")
 
 
 def evaluate(model, X, y) -> dict:
@@ -224,10 +232,12 @@ def train_xgb(train: pd.DataFrame, neutralize, seed: int) -> XGBClassifier:
     return model
 
 
-def holdout_report(model, neutralize, train_groups, phish_files, benign_files):
+def holdout_report(model, neutralize, train_groups, phish_files, benign_files, host_only):
     frames = []
     for files, label in ((phish_files, 1), (benign_files, 0)):
         urls = clean(load_all(files)) if files else []
+        if urls and host_only:
+            urls = to_hosts(urls)
         if urls:
             frames.append(featurize(urls, label))
     if not frames:
@@ -235,8 +245,10 @@ def holdout_report(model, neutralize, train_groups, phish_files, benign_files):
     hold = pd.concat(frames, ignore_index=True)
     before = len(hold)
     hold = hold[~hold["group"].isin(train_groups)]
-    print(f"\n--- Second-source holdout ({len(hold):,} rows; "
-          f"{before - len(hold):,} removed for sharing a domain with training data) ---")
+    # One row per domain, so a single campaign can't dominate the result
+    hold = hold.drop_duplicates(subset=["group", "label"])
+    print(f"\n--- Second-source holdout ({len(hold):,} distinct domains; "
+          f"{before - len(hold):,} rows removed as duplicates or shared with training data) ---")
     pred = model.predict(prep(hold, neutralize))
     for label, name, metric in ((1, "phishing", "detection rate"), (0, "benign", "false-positive rate")):
         sub = hold["label"] == label
@@ -252,9 +264,11 @@ def holdout_report(model, neutralize, train_groups, phish_files, benign_files):
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--phishing", nargs="+", required=True, help="phishing URL file(s)")
-    p.add_argument("--benign", nargs="+", required=True, help="benign URL file(s), full URLs")
+    p.add_argument("--benign", nargs="+", required=True, help="benign URL file(s)")
     p.add_argument("--holdout-phishing", nargs="*", default=[], help="phishing from a DIFFERENT source, test only")
     p.add_argument("--holdout-benign", nargs="*", default=[], help="benign from a DIFFERENT source, test only")
+    p.add_argument("--host-only", action="store_true",
+                   help="reduce every URL to http://<hostname> (removes path and scheme shortcuts)")
     p.add_argument("--max-per-class", type=int, default=50000)
     p.add_argument("--test-size", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=42)
@@ -272,6 +286,11 @@ def main():
     phish = clean(load_all(args.phishing))
     benign = clean(load_all(args.benign))
     print(f"After cleaning and dedup: phishing={len(phish):,}  benign={len(benign):,}")
+
+    if args.host_only:
+        phish, benign = to_hosts(phish), to_hosts(benign)
+        print(f"Host-only mode, unique hosts: phishing={len(phish):,}  benign={len(benign):,}")
+
     if min(len(phish), len(benign)) < 500:
         raise SystemExit("Need at least a few hundred URLs per class for a meaningful result.")
 
@@ -309,7 +328,8 @@ def main():
 
     if args.holdout_phishing or args.holdout_benign:
         chosen = train_xgb(train, args.neutralize, args.seed)
-        holdout_report(chosen, args.neutralize, train_groups, args.holdout_phishing, args.holdout_benign)
+        holdout_report(chosen, args.neutralize, train_groups,
+                       args.holdout_phishing, args.holdout_benign, args.host_only)
 
     # Final model: retrain on ALL data, with the chosen neutralization
     final = train_xgb(df, args.neutralize, args.seed)
@@ -328,6 +348,7 @@ def main():
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "feature_order": FEATURE_ORDER,
         "neutralized_features": args.neutralize,
+        "host_only": args.host_only,
         "rows_per_class": n,
         "split": "GroupShuffleSplit by registered domain",
         "grouped_test_metrics": reported,

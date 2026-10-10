@@ -1,43 +1,77 @@
+#inference.py
+import json
+import logging
 import os
+
 import joblib
 import pandas as pd
-from backend.app.ml.feature_extractor import extract_url_features
+
+from .feature_extractor import FEATURE_ORDER, extract_url_features, host_only_url
+
+logger = logging.getLogger(__name__)
+
+_DIR = os.path.dirname(__file__)
+MODEL_PATH = os.path.join(_DIR, "phishing_xgb_v1.pkl")
+META_PATH = os.path.join(_DIR, "phishing_xgb_v1.meta.json")
 
 _MODEL_CACHE = None
+_MODEL_TRIED = False
+_META_CACHE = None
+
+
+def load_meta() -> dict:
+    """Training settings saved next to the model (host_only, neutralized_features...)."""
+    global _META_CACHE
+    if _META_CACHE is None:
+        try:
+            with open(META_PATH, encoding="utf-8") as f:
+                _META_CACHE = json.load(f)
+        except (OSError, ValueError):
+            _META_CACHE = {}
+    return _META_CACHE
+
 
 def load_model():
-    global _MODEL_CACHE
-    if _MODEL_CACHE is not None:
+    global _MODEL_CACHE, _MODEL_TRIED
+    if _MODEL_CACHE is not None or _MODEL_TRIED:
         return _MODEL_CACHE
-    
-    current_dir = os.path.dirname(__file__)
-    model_path = os.path.join(current_dir, "phishing_xgb_v1.pkl")
-    
-    if os.path.exists(model_path):
+    _MODEL_TRIED = True
+    if os.path.exists(MODEL_PATH):
         try:
-            _MODEL_CACHE = joblib.load(model_path)
-        except Exception as e:
-            print(f"Warning: Failed to load ML model from {model_path}: {e}")
-            _MODEL_CACHE = None
+            _MODEL_CACHE = joblib.load(MODEL_PATH)
+        except Exception:
+            logger.exception("Failed to load ML model from %s", MODEL_PATH)
     return _MODEL_CACHE
+
+
+def uses_host_only() -> bool:
+    """True if the saved model was trained with --host-only."""
+    return bool(load_meta().get("host_only", False))
+
 
 def predict_phishing_probability(url: str) -> float:
     """
-    Loads phishing_xgb_v1.pkl and returns a risk score between 0.0 and 1.0.
-    Falls back gracefully if the model artifact is missing or fails to load.
+    Returns a phishing probability between 0.0 and 1.0.
+    If the model was trained host-only, the URL is reduced to its hostname first,
+    exactly as in training. Falls back to a simple heuristic if the model is unavailable.
     """
     model = load_model()
-    features = extract_url_features(url)
-    df_features = pd.DataFrame([features])
-    
+    meta = load_meta()
+
     if model is not None:
         try:
-            proba = model.predict_proba(df_features)[0][1]
+            target = (host_only_url(url) or url) if uses_host_only() else url
+            features = extract_url_features(target)
+            row = {name: features[name] for name in FEATURE_ORDER}
+            for name in meta.get("neutralized_features", []):
+                row[name] = 0  # same neutralization as training
+            proba = model.predict_proba(pd.DataFrame([row])[FEATURE_ORDER])[0][1]
             return float(proba)
-        except Exception as e:
-            print(f"Warning: Model prediction failed ({e}), using heuristic fallback.")
-            
-    # Deterministic heuristic fallback if model is unavailable
+        except Exception:
+            logger.exception("Model prediction failed, using heuristic fallback")
+
+    # Deterministic heuristic fallback if the model is unavailable
+    features = extract_url_features(url)
     score = 0.1
     if features["suspicious_tld"] == 1:
         score += 0.4

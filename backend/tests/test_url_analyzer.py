@@ -21,7 +21,7 @@ def test_check_brand_impersonation():
     assert check_brand_impersonation("amazon-security.net") is True
 
 def test_ssrf_rejection():
-    with pytest.raises(ValueError, match="SSRF protection"):
+    with pytest.raises(ValueError, match="Private and local"):
         asyncio.run(analyze_url("http://127.0.0.1/admin"))
 
     with pytest.raises(ValueError, match="SSRF protection"):

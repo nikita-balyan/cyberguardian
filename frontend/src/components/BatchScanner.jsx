@@ -4,7 +4,10 @@ import SeverityBadge from './SeverityBadge'
 import { scanBatch } from '../services/api'
 
 const MAX_ITEMS = 50
-const FILTERS = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+const FILTERS = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
+
+const filterLabel = (f) =>
+  f === 'ALL' ? 'All risk levels' : f === 'UNKNOWN' ? 'Not verified' : f.charAt(0) + f.slice(1).toLowerCase()
 
 function Segmented({ label, options, value, onChange }) {
   return (
@@ -32,6 +35,8 @@ const csvCell = (v) => {
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s
   return '"' + s.replace(/"/g, '""') + '"'
 }
+
+const levelOf = (r) => String(r.risk_level || '').toUpperCase()
 
 export default function BatchScanner() {
   const [scanType, setScanType] = useState('url')
@@ -88,14 +93,17 @@ export default function BatchScanner() {
   const handleExportCSV = () => {
     if (!batchResult?.results) return
     const headers = ['Target', 'Risk Level', 'Risk Score', 'Threat Intel Flagged', 'Flags Count', 'Summary']
-    const rows = batchResult.results.map((r) => [
-      csvCell(r.target),
-      csvCell(r.risk_level),
-      csvCell(r.risk_score),
-      csvCell(r.threat_intel_flagged ? 'YES' : 'NO'),
-      csvCell(r.flags_count),
-      csvCell(r.summary),
-    ])
+    const rows = batchResult.results.map((r) => {
+      const unverified = levelOf(r) === 'UNKNOWN'
+      return [
+        csvCell(r.target),
+        csvCell(unverified ? 'NOT VERIFIED' : r.risk_level),
+        csvCell(unverified ? '' : r.risk_score),
+        csvCell(unverified ? 'NOT CHECKED' : r.threat_intel_flagged ? 'YES' : 'NO'),
+        csvCell(r.flags_count),
+        csvCell(r.summary),
+      ]
+    })
     const csv = [headers.map(csvCell).join(','), ...rows.map((r) => r.join(','))].join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
     const link = document.createElement('a')
@@ -110,20 +118,25 @@ export default function BatchScanner() {
   const results = batchResult?.results || []
   const q = searchQuery.trim().toLowerCase()
   const filteredResults = results.filter((r) => {
-    const level = String(r.risk_level || '').toUpperCase()
-    const matchesRisk = riskFilter === 'ALL' || level === riskFilter
+    const matchesRisk = riskFilter === 'ALL' || levelOf(r) === riskFilter
     const matchesSearch =
       !q || String(r.target || '').toLowerCase().includes(q) || String(r.summary || '').toLowerCase().includes(q)
     return matchesRisk && matchesSearch
   })
 
-  const count = (...levels) => results.filter((r) => levels.includes(String(r.risk_level || '').toUpperCase())).length
+  const count = (...levels) => results.filter((r) => levels.includes(levelOf(r))).length
+  const unverifiedCount = count('UNKNOWN')
   const stats = [
     { id: 'total', label: 'Total targets', value: batchResult?.total_items ?? results.length },
     { id: 'high', level: 'HIGH', label: 'High / critical', value: count('HIGH', 'CRITICAL') },
     { id: 'medium', level: 'MEDIUM', label: 'Medium', value: count('MEDIUM') },
     { id: 'low', level: 'LOW', label: 'Low', value: count('LOW') },
   ]
+  // Only show this card when something couldn't be scanned
+  if (unverifiedCount > 0) {
+    stats.push({ id: 'unknown', level: 'UNKNOWN', label: 'Not verified', value: unverifiedCount })
+  }
+  const statCols = stats.length > 4 ? 'lg:grid-cols-5' : 'lg:grid-cols-4'
 
   return (
     <div className="space-y-4">
@@ -217,7 +230,7 @@ export default function BatchScanner() {
 
       {batchResult && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className={`grid grid-cols-2 gap-3 ${statCols}`}>
             {stats.map((s) => (
               <div key={s.id} className="rounded-lg border border-line bg-surface p-4">
                 {s.level ? (
@@ -257,9 +270,7 @@ export default function BatchScanner() {
                   className="rounded-md border border-line bg-bg px-2.5 py-1.5 text-sm focus:border-accent"
                 >
                   {FILTERS.map((f) => (
-                    <option key={f} value={f}>
-                      {f === 'ALL' ? 'All risk levels' : f.charAt(0) + f.slice(1).toLowerCase()}
-                    </option>
+                    <option key={f} value={f}>{filterLabel(f)}</option>
                   ))}
                 </select>
                 <button
@@ -293,28 +304,35 @@ export default function BatchScanner() {
                       </td>
                     </tr>
                   ) : (
-                    filteredResults.map((res, idx) => (
-                      <tr key={idx} className="border-b border-line last:border-b-0 align-top">
-                        <td className="whitespace-nowrap px-4 py-2.5">
-                          <span className="inline-flex items-center gap-2">
-                            <SeverityBadge level={res.risk_level} />
-                            <span className="tabular-nums text-muted">{res.risk_score}</span>
-                          </span>
-                        </td>
-                        <td className="max-w-xs truncate px-4 py-2.5 font-mono text-xs" title={res.target}>
-                          {res.target}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-2.5">
-                          {res.threat_intel_flagged ? (
-                            <SeverityBadge level="CRITICAL" label="Flagged" />
-                          ) : (
-                            <SeverityBadge level="LOW" label="Clean" />
-                          )}
-                        </td>
-                        <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">{res.flags_count}</td>
-                        <td className="max-w-md px-4 py-2.5 text-muted">{res.summary}</td>
-                      </tr>
-                    ))
+                    filteredResults.map((res, idx) => {
+                      const unverified = levelOf(res) === 'UNKNOWN'
+                      return (
+                        <tr key={idx} className="border-b border-line align-top last:border-b-0">
+                          <td className="whitespace-nowrap px-4 py-2.5">
+                            <span className="inline-flex items-center gap-2">
+                              <SeverityBadge level={res.risk_level} label={unverified ? 'NOT VERIFIED' : undefined} />
+                              {!unverified && <span className="tabular-nums text-muted">{res.risk_score}</span>}
+                            </span>
+                          </td>
+                          <td className="max-w-xs truncate px-4 py-2.5 font-mono text-xs" title={res.target}>
+                            {res.target}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-2.5">
+                            {unverified ? (
+                              <span className="text-muted">Not checked</span>
+                            ) : res.threat_intel_flagged ? (
+                              <SeverityBadge level="CRITICAL" label="Flagged" />
+                            ) : (
+                              <SeverityBadge level="LOW" label="Clean" />
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">
+                            {unverified ? <span className="text-muted">–</span> : res.flags_count}
+                          </td>
+                          <td className="max-w-md px-4 py-2.5 text-muted">{res.summary}</td>
+                        </tr>
+                      )
+                    })
                   )}
                 </tbody>
               </table>

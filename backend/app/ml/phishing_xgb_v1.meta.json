@@ -1,0 +1,36 @@
+{
+  "trained_at": "2026-10-10T16:39:19.997688+00:00",
+  "feature_order": [
+    "url_length",
+    "hostname_length",
+    "path_length",
+    "shannon_entropy",
+    "subdomain_count",
+    "dot_count",
+    "hyphen_count",
+    "has_ip",
+    "suspicious_tld",
+    "digit_ratio",
+    "path_depth",
+    "https_status"
+  ],
+  "neutralized_features": [],
+  "host_only": true,
+  "rows_per_class": 50000,
+  "split": "GroupShuffleSplit by registered domain",
+  "grouped_test_metrics": {
+    "accuracy": 0.7583272990586531,
+    "precision": 0.8511019989748847,
+    "recall": 0.4923647146034099,
+    "f1": 0.6238377007607777,
+    "roc_auc": 0.7618228865677178,
+    "pr_auc": 0.7704967426993934,
+    "recall_at_1pct_fpr": 0.3739065974796145,
+    "confusion": {
+      "tn": 9246,
+      "fp": 581,
+      "fn": 3424,
+      "tp": 3321
+    }
+  }
+}

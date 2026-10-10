@@ -1,19 +1,28 @@
-import pytest
+#test_ml.py
 import os
-from backend.app.ml.feature_extractor import extract_url_features, compute_entropy
-from backend.app.ml.inference import predict_phishing_probability, load_model
+
+import pytest
+
+from backend.app.ml.feature_extractor import (
+    compute_entropy,
+    extract_url_features,
+    host_only_url,
+)
+from backend.app.ml.inference import predict_phishing_probability, load_model, uses_host_only
 
 pytestmark = pytest.mark.skip_db_init
+
 
 def test_compute_entropy():
     assert compute_entropy("") == 0.0
     assert compute_entropy("aaaa") == 0.0
     assert compute_entropy("ab") > 0.0
 
+
 def test_extract_url_features():
     url = "https://login.secure-apple-id.com.xyz/account/signin?id=123"
     feats = extract_url_features(url)
-    
+
     assert isinstance(feats, dict)
     assert len(feats) == 12
     assert feats["https_status"] == 1
@@ -25,19 +34,43 @@ def test_extract_url_features():
     assert "hyphen_count" in feats
     assert "digit_ratio" in feats
 
+
 def test_extract_url_features_ip():
     url = "http://192.168.1.1/login"
     feats = extract_url_features(url)
     assert feats["has_ip"] == 1
     assert feats["https_status"] == 0
 
+
+def test_ipv6_host_detected():
+    assert extract_url_features("http://[::1]/")["has_ip"] == 1
+
+
+def test_subdomain_count_never_negative():
+    assert extract_url_features("http://localhost/")["subdomain_count"] == 0
+
+
+def test_scheme_less_url_still_parsed():
+    feats = extract_url_features("example.xyz/login")
+    assert feats["hostname_length"] == len("example.xyz")
+    assert feats["suspicious_tld"] == 1
+    assert feats["https_status"] == 0
+
+
+def test_host_only_url():
+    assert host_only_url("https://www.Example.com/a/b?x=1#frag") == "http://example.com"
+    assert host_only_url("example.com/login") == "http://example.com"
+    assert host_only_url("http://192.168.1.1:8080/x") == "http://192.168.1.1"
+    assert host_only_url("") == ""
+
+
 def test_inference_prediction():
     phishing_url = "http://login.secure-apple-id.com.xyz/account/signin"
     benign_url = "https://www.google.com"
-    
+
     p_score = predict_phishing_probability(phishing_url)
     b_score = predict_phishing_probability(benign_url)
-    
+
     assert isinstance(p_score, float)
     assert isinstance(b_score, float)
     assert 0.0 <= p_score <= 1.0
@@ -45,7 +78,17 @@ def test_inference_prediction():
     # Phishing URL should have higher predicted probability than benign URL
     assert p_score > b_score
 
+
+def test_prediction_ignores_path_and_scheme_for_host_only_model():
+    if not uses_host_only():
+        pytest.skip("the saved model was not trained with --host-only")
+    a = predict_phishing_probability("https://github.com/login")
+    b = predict_phishing_probability("http://www.github.com/a/very/long/path?x=1")
+    assert a == b
+
+
 def test_model_artifact_exists():
     current_dir = os.path.dirname(__file__)
     model_path = os.path.join(current_dir, "..", "app", "ml", "phishing_xgb_v1.pkl")
     assert os.path.exists(model_path)
+    assert load_model() is not None

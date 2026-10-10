@@ -19,7 +19,7 @@ from ..ml.feature_extractor import extract_url_features
 
 try:  # bundled public-suffix snapshot, no network call
     import tldextract
-    _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+    _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
 except Exception:  # pragma: no cover - fallback if the package isn't installed
     _TLD_EXTRACT = None
 
@@ -27,7 +27,25 @@ logger = logging.getLogger(__name__)
 
 SUSPICIOUS_TLDS = {".xyz", ".top", ".buzz", ".tk", ".cc", ".gq", ".ml", ".ga", ".work", ".loan", ".click"}
 POPULAR_BRANDS = ["sbi", "hdfc", "paytm", "google", "amazon", "paypal", "netflix", "apple", "microsoft", "icici"]
-LEGIT_BRAND_SUFFIXES = ("com", "in", "co.in")
+LEGIT_BRAND_SUFFIXES = ("com", "in", "co.in")  # must be defined BEFORE BRAND_LEGIT below
+
+# brand -> registered domains that genuinely belong to it (not exhaustive; extend as needed)
+EXTRA_BRANDS = {
+    "roblox": {"roblox.com"},
+    "trezor": {"trezor.io"},
+    "metamask": {"metamask.io", "consensys.io"},
+    "whatsapp": {"whatsapp.com", "whatsapp.net"},
+    "facebook": {"facebook.com", "facebook.net", "facebookmail.com", "fb.com"},
+    "instagram": {"instagram.com", "cdninstagram.com"},
+    "discord": {"discord.com", "discord.gg", "discordapp.com", "discordapp.net"},
+    "tiktok": {"tiktok.com", "tiktokv.com", "tiktokcdn.com"},
+    "binance": {"binance.com"},
+    "coinbase": {"coinbase.com"},
+}
+
+BRAND_LEGIT = {b: {f"{b}.{s}" for s in LEGIT_BRAND_SUFFIXES} for b in POPULAR_BRANDS}
+for _brand, _domains in EXTRA_BRANDS.items():
+    BRAND_LEGIT.setdefault(_brand, set()).update(_domains)
 
 MAX_REDIRECTS = 5
 ALLOWED_PORTS = {None, 80, 443, 8080, 8443}
@@ -184,22 +202,17 @@ def _token_hits_brand(token: str, brand: str) -> bool:
     # longer brands also match as a prefix or suffix ("paypalsecure", "securepaypal")
     return len(brand) >= 5 and (token.startswith(brand) or token.endswith(brand))
 
-
 def check_brand_impersonation(hostname: str) -> bool:
-    """Flags hosts that use a brand name but aren't that brand's own domain.
-    Matches whole word-tokens, so 'dsbistro.com' no longer trips the 'sbi' rule."""
+    """Flags hosts that use a brand name but aren't that brand's own domain."""
     host = (hostname or "").lower().strip(".")
     if not host:
         return False
     reg = registered_domain(host)
     tokens = {t for label in host.split(".") for t in re.split(r"[^a-z]+", label) if t}
-    for brand in POPULAR_BRANDS:
-        if any(_token_hits_brand(t, brand) for t in tokens):
-            legit = {f"{brand}.{suffix}" for suffix in LEGIT_BRAND_SUFFIXES}
-            if reg not in legit:
-                return True
+    for brand, legit_domains in BRAND_LEGIT.items():
+        if any(_token_hits_brand(t, brand) for t in tokens) and reg not in legit_domains:
+            return True
     return False
-
 
 # --------------------------------------------------------------------------- #
 # Main entry point
