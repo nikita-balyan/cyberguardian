@@ -4,6 +4,9 @@ import React from 'react'
 const INLINE_PATTERN =
   /(\*\*(?:[^*]|\*(?!\*))+\*\*|__(?:[^_]|_(?!_))+__|\*(?:[^*])+\*|_(?:[^_])+_|`[^`]+`|\[[^\]]+\]\([^)]+\))/g
 
+// Only allow safe link protocols (blocks javascript: and similar)
+const isSafeUrl = (href) => /^(https?:|mailto:)/i.test(href.trim())
+
 // Renders a single line of inline markdown into React nodes.
 export function renderInline(text, keyPrefix = 'md') {
   if (text === null || text === undefined) return null
@@ -17,7 +20,7 @@ export function renderInline(text, keyPrefix = 'md') {
       (part.startsWith('__') && part.endsWith('__'))
     ) {
       return (
-        <strong key={key} className="font-bold text-white">
+        <strong key={key} className="font-semibold">
           {part.slice(2, -2)}
         </strong>
       )
@@ -27,7 +30,7 @@ export function renderInline(text, keyPrefix = 'md') {
       return (
         <code
           key={key}
-          className="px-1.5 py-0.5 mx-0.5 rounded bg-slate-950 border border-slate-800 font-mono text-[0.85em] text-cyan-300"
+          className="mx-0.5 rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em]"
         >
           {part.slice(1, -1)}
         </code>
@@ -39,7 +42,7 @@ export function renderInline(text, keyPrefix = 'md') {
       (part.startsWith('_') && part.endsWith('_'))
     ) {
       return (
-        <em key={key} className="italic text-slate-200">
+        <em key={key} className="italic">
           {part.slice(1, -1)}
         </em>
       )
@@ -47,13 +50,16 @@ export function renderInline(text, keyPrefix = 'md') {
 
     const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
     if (linkMatch) {
+      if (!isSafeUrl(linkMatch[2])) {
+        return <React.Fragment key={key}>{linkMatch[1]}</React.Fragment>
+      }
       return (
         <a
           key={key}
           href={linkMatch[2]}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-blue-400 underline hover:text-blue-300 break-all"
+          className="break-all text-accent underline underline-offset-2 hover:text-accent-hover"
         >
           {linkMatch[1]}
         </a>
@@ -65,12 +71,12 @@ export function renderInline(text, keyPrefix = 'md') {
 }
 
 const HEADING_CLASSES = {
-  1: 'text-lg font-bold text-white mt-1 mb-2',
-  2: 'text-base font-bold text-white mt-1 mb-2',
-  3: 'text-sm font-bold text-indigo-300 uppercase tracking-wider mt-1 mb-1',
-  4: 'text-sm font-semibold text-slate-200 mt-1 mb-1',
-  5: 'text-xs font-semibold text-slate-300 mt-1 mb-1',
-  6: 'text-xs font-semibold text-slate-400 mt-1 mb-1',
+  1: 'text-base font-semibold mt-1 mb-2',
+  2: 'text-sm font-semibold mt-1 mb-1.5',
+  3: 'text-sm font-semibold mt-1 mb-1',
+  4: 'text-sm font-medium mt-1 mb-1',
+  5: 'text-xs font-medium text-muted mt-1 mb-1',
+  6: 'text-xs font-medium text-muted mt-1 mb-1',
 }
 
 // Renders a full block-level markdown document (headings, lists, quotes, rules, paragraphs).
@@ -88,10 +94,10 @@ export default function MarkdownRenderer({ content, className = '' }) {
     blocks.push(
       <ListTag
         key={`list-${blocks.length}`}
-        className={ordered ? 'list-decimal list-outside ml-5 space-y-1.5' : 'list-disc list-outside ml-5 space-y-1.5'}
+        className={ordered ? 'ml-5 list-outside list-decimal space-y-1.5' : 'ml-5 list-outside list-disc space-y-1.5'}
       >
         {items.map((item, i) => (
-          <li key={i} className="text-slate-300 leading-relaxed pl-1">
+          <li key={i} className="pl-1 leading-relaxed">
             {renderInline(item, `li-${blocks.length}-${i}`)}
           </li>
         ))}
@@ -123,7 +129,7 @@ export default function MarkdownRenderer({ content, className = '' }) {
 
     if (/^(---|\*\*\*|___)\s*$/.test(line.trim())) {
       flushList()
-      blocks.push(<hr key={`hr-${idx}`} className="border-slate-800 my-2" />)
+      blocks.push(<hr key={`hr-${idx}`} className="my-2 border-line" />)
       return
     }
 
@@ -131,10 +137,7 @@ export default function MarkdownRenderer({ content, className = '' }) {
     if (quoteMatch) {
       flushList()
       blocks.push(
-        <blockquote
-          key={`q-${idx}`}
-          className="border-l-2 border-indigo-500/60 pl-3 py-1 text-slate-400 italic"
-        >
+        <blockquote key={`q-${idx}`} className="border-l-2 border-line py-0.5 pl-3 text-muted">
           {renderInline(quoteMatch[1], `q-${idx}`)}
         </blockquote>
       )
@@ -163,7 +166,7 @@ export default function MarkdownRenderer({ content, className = '' }) {
 
     flushList()
     blocks.push(
-      <p key={`p-${idx}`} className="text-slate-300 leading-relaxed">
+      <p key={`p-${idx}`} className="leading-relaxed">
         {renderInline(line, `p-${idx}`)}
       </p>
     )

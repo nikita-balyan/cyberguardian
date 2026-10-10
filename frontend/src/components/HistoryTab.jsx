@@ -1,35 +1,99 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
-  Activity,
-  AlertTriangle,
-  AlertOctagon,
-  CheckCircle2,
-  RefreshCw,
-  Globe,
-  QrCode,
-  MessageSquare,
-  Clock,
-  ChevronDown,
-  ChevronUp,
-  Shield,
-  Layers,
-  FileText,
-  AlertCircle
+  RefreshCw, Globe, QrCode, MessageSquare, Shield, AlertCircle,
+  ChevronDown, ChevronUp, ChevronRight, ArrowUpDown,
 } from 'lucide-react'
+import SeverityBadge from './SeverityBadge'
 import { getScanHistory } from '../services/api'
+
+const TYPE_META = {
+  url: { label: 'URL', Icon: Globe },
+  qr: { label: 'QR code', Icon: QrCode },
+  message: { label: 'Message', Icon: MessageSquare },
+}
+
+const LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+
+// Maps any persisted schema (legacy or current) into a single shape.
+const normalizeScan = (scan) => ({
+  id: scan.id,
+  scanType: String(scan.scan_type || scan.modality || 'unknown').toLowerCase(),
+  target: scan.target,
+  riskLevel: (scan.risk_level || scan.severity_level || 'LOW').toUpperCase(),
+  riskScore: scan.risk_score ?? scan.composite_risk_score ?? 0,
+  heuristicScore: scan.heuristic_score,
+  mlProbability: scan.ml_probability,
+  summary: scan.summary || scan.ai_explanation || '',
+  evidence: scan.evidence || scan.evidence_json || null,
+  createdAt: scan.created_at,
+})
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return String(dateStr)
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+const timeOf = (s) => {
+  const t = new Date(s.createdAt).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
+
+const COMPARATORS = {
+  createdAt: (a, b) => timeOf(a) - timeOf(b),
+  scanType: (a, b) => a.scanType.localeCompare(b.scanType),
+  target: (a, b) => String(a.target || '').localeCompare(String(b.target || '')),
+  riskScore: (a, b) => (Number(a.riskScore) || 0) - (Number(b.riskScore) || 0),
+}
+
+function TypeTag({ type }) {
+  const meta = TYPE_META[type] || { label: type, Icon: Shield }
+  const { Icon } = meta
+  return (
+    <span className="inline-flex items-center gap-1.5 text-sm">
+      <Icon className="h-3.5 w-3.5 text-muted" aria-hidden="true" />
+      {meta.label}
+    </span>
+  )
+}
+
+function SortHeader({ label, k, sort, onSort, className = '' }) {
+  const active = sort.key === k
+  const Icon = !active ? ArrowUpDown : sort.dir === 'asc' ? ChevronUp : ChevronDown
+  return (
+    <th
+      scope="col"
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      className={`px-4 py-2 text-left font-medium ${className}`}
+    >
+      <button type="button" onClick={() => onSort(k)} className="inline-flex items-center gap-1 hover:text-fg">
+        {label}
+        <Icon className={`h-3 w-3 ${active ? 'text-fg' : 'opacity-50'}`} aria-hidden="true" />
+      </button>
+    </th>
+  )
+}
+
+const selectCls = 'rounded-md border border-line bg-bg px-2.5 py-1.5 text-sm focus:border-accent'
 
 export default function HistoryTab() {
   const [historyData, setHistoryData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [expandedRow, setExpandedRow] = useState(null)
+  const [query, setQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [levelFilter, setLevelFilter] = useState('all')
+  const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' })
 
   const fetchHistory = async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await getScanHistory()
-      setHistoryData(data)
+      setHistoryData(await getScanHistory())
     } catch (err) {
       setError(err.message)
     } finally {
@@ -41,304 +105,219 @@ export default function HistoryTab() {
     fetchHistory()
   }, [])
 
-  // Maps any persisted schema (legacy Supabase or current) into a single shape.
-  const normalizeScan = (scan) => ({
-    id: scan.id,
-    scanType: scan.scan_type || scan.modality || 'unknown',
-    target: scan.target,
-    riskLevel: (scan.risk_level || scan.severity_level || 'LOW').toUpperCase(),
-    riskScore: scan.risk_score ?? scan.composite_risk_score ?? 0,
-    heuristicScore: scan.heuristic_score,
-    mlProbability: scan.ml_probability,
-    summary: scan.summary || scan.ai_explanation || '',
-    evidence: scan.evidence || scan.evidence_json || null,
-    createdAt: scan.created_at,
-  })
-
-  // Distinct severity color encodings:
-  // LOW -> Green, MEDIUM -> Yellow, HIGH -> Orange, CRITICAL -> Red
-  const SEVERITY_STYLES = {
-    LOW: { cls: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400', Icon: CheckCircle2 },
-    MEDIUM: { cls: 'bg-amber-500/15 border-amber-500/30 text-amber-400', Icon: AlertTriangle },
-    HIGH: { cls: 'bg-orange-500/15 border-orange-500/30 text-orange-400', Icon: AlertTriangle },
-    CRITICAL: { cls: 'bg-rose-500/15 border-rose-500/30 text-rose-400', Icon: AlertOctagon },
-  }
-
-  const getRiskBadge = (level, score) => {
-    const lvl = (level || 'LOW').toUpperCase()
-    const { cls, Icon } = SEVERITY_STYLES[lvl] || {
-      cls: 'bg-slate-500/15 border-slate-500/30 text-slate-400',
-      Icon: Shield,
-    }
-    const scoreLabel = score !== undefined && score !== null ? ` (${score})` : ''
-    return (
-      <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-bold border ${cls}`}>
-        <Icon className="w-3 h-3" />
-        <span>{lvl}{scoreLabel}</span>
-      </span>
+  const onSort = (key) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'createdAt' || key === 'riskScore' ? 'desc' : 'asc' }
     )
-  }
 
-  const getTypeIcon = (type) => {
-    switch (type?.toLowerCase()) {
-      case 'url':
-        return (
-          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-500/10 border border-blue-500/20 text-blue-400">
-            <Globe className="w-3 h-3" />
-            <span>URL</span>
-          </span>
-        )
-      case 'qr':
-        return (
-          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-            <QrCode className="w-3 h-3" />
-            <span>QR</span>
-          </span>
-        )
-      case 'message':
-        return (
-          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
-            <MessageSquare className="w-3 h-3" />
-            <span>Message</span>
-          </span>
-        )
-      default:
-        return (
-          <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-md text-xs font-semibold bg-slate-500/10 border border-slate-500/20 text-slate-400">
-            <Shield className="w-3 h-3" />
-            <span>{type}</span>
-          </span>
-        )
-    }
-  }
+  const allScans = useMemo(() => (historyData?.scans || []).map(normalizeScan), [historyData])
+  const typeOptions = useMemo(() => [...new Set(allScans.map((s) => s.scanType))], [allScans])
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '-'
-    try {
-      const d = new Date(dateStr)
-      return d.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-    } catch {
-      return dateStr
-    }
-  }
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = allScans.filter(
+      (s) =>
+        (typeFilter === 'all' || s.scanType === typeFilter) &&
+        (levelFilter === 'all' || s.riskLevel === levelFilter) &&
+        (!q || String(s.target || '').toLowerCase().includes(q))
+    )
+    const cmp = COMPARATORS[sort.key]
+    return [...filtered].sort((a, b) => (sort.dir === 'asc' ? cmp(a, b) : cmp(b, a)))
+  }, [allScans, query, typeFilter, levelFilter, sort])
 
+  const rb = historyData?.risk_breakdown || {}
+  const pick = (k) => Number(rb[k] ?? rb[k.toUpperCase()] ?? 0)
   const totalScans = historyData?.total_scans || 0
-  const highScans = historyData?.risk_breakdown?.high || historyData?.risk_breakdown?.HIGH || 0
-  const mediumScans = historyData?.risk_breakdown?.medium || historyData?.risk_breakdown?.MEDIUM || 0
-  const lowScans = historyData?.risk_breakdown?.low || historyData?.risk_breakdown?.LOW || 0
+  const stats = [
+    { id: 'total', label: 'Total scans', value: totalScans },
+    { id: 'high', level: 'HIGH', label: 'High / critical', value: pick('high') + pick('critical') },
+    { id: 'medium', level: 'MEDIUM', label: 'Medium', value: pick('medium') },
+    { id: 'low', level: 'LOW', label: 'Low', value: pick('low') },
+  ]
+
+  const filtersActive = query || typeFilter !== 'all' || levelFilter !== 'all'
+  const clearFilters = () => {
+    setQuery('')
+    setTypeFilter('all')
+    setLevelFilter('all')
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Header & Refresh Controls */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-900/80 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
-        <div className="flex items-center space-x-3">
-          <div className="bg-purple-600/20 p-2.5 rounded-xl border border-purple-500/30 text-purple-400">
-            <Activity className="w-5 h-5" />
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {stats.map((s) => (
+          <div key={s.id} className="rounded-lg border border-line bg-surface p-4">
+            {s.level ? (
+              <SeverityBadge level={s.level} label={s.label} />
+            ) : (
+              <span className="text-xs font-medium text-muted">{s.label}</span>
+            )}
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{s.value}</p>
+            <p className="text-xs text-muted">
+              {s.id === 'total'
+                ? 'Saved in the audit log'
+                : totalScans > 0
+                ? `${Math.round((s.value / totalScans) * 100)}% of total`
+                : '0% of total'}
+            </p>
           </div>
-          <div>
-            <h3 className="text-lg font-bold text-white">Scan History & Threat Analytics</h3>
-            <p className="text-xs text-slate-400">Real-time audit telemetry and deterministic risk metrics stored in SQLite</p>
-          </div>
-        </div>
-
-        <button
-          onClick={fetchHistory}
-          disabled={loading}
-          className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold border border-slate-700 transition-all shadow-sm"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>Refresh Data</span>
-        </button>
+        ))}
       </div>
 
-      {/* Analytics Counter Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Scans */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Scans</span>
-            <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400">
-              <Layers className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <span className="text-3xl font-black text-white">{totalScans}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">Persisted audit entries</span>
-          </div>
-        </div>
-
-        {/* High / Critical Risk */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider">High / Critical</span>
-            <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400">
-              <AlertOctagon className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <span className="text-3xl font-black text-rose-400">{highScans}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">
-              {totalScans > 0 ? `${Math.round((highScans / totalScans) * 100)}% of total` : '0%'}
-            </span>
-          </div>
-        </div>
-
-        {/* Medium Risk */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Medium Risk</span>
-            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <span className="text-3xl font-black text-amber-400">{mediumScans}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">
-              {totalScans > 0 ? `${Math.round((mediumScans / totalScans) * 100)}% of total` : '0%'}
-            </span>
-          </div>
-        </div>
-
-        {/* Low Risk */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 backdrop-blur-sm shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">Low Risk</span>
-            <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-              <CheckCircle2 className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <span className="text-3xl font-black text-emerald-400">{lowScans}</span>
-            <span className="text-xs text-slate-400 block mt-0.5">
-              {totalScans > 0 ? `${Math.round((lowScans / totalScans) * 100)}% of total` : '0%'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Error state */}
       {error && (
-        <div className="p-4 bg-rose-950/30 border border-rose-900/50 rounded-xl flex items-center space-x-3 text-rose-300 text-sm">
-          <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-400" />
+        <div role="alert" className="flex items-start gap-2 rounded-md bg-sev-critical-bg p-3 text-sm text-sev-critical">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{error}</span>
         </div>
       )}
 
-
-      {/* Audit Log Table */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-sm shadow-xl">
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Clock className="w-4 h-4 text-slate-400" />
-            <h4 className="text-sm font-bold text-white uppercase tracking-wider">Latest 20 Audit Log Records</h4>
+      {/* Audit log */}
+      <section className="rounded-lg border border-line bg-surface" aria-label="Audit log">
+        <div className="flex flex-col gap-3 border-b border-line p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold">Audit log</h3>
+            <p className="text-xs text-muted">
+              Showing {rows.length} of {allScans.length} recent scans
+            </p>
           </div>
-          <span className="text-xs text-slate-500 font-mono">SQLite: cyberguardian.db</span>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor="history-search" className="sr-only">Search targets</label>
+            <input
+              id="history-search"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search targets"
+              className="w-44 rounded-md border border-line bg-bg px-2.5 py-1.5 font-mono text-sm placeholder:font-sans placeholder:text-muted focus:border-accent"
+            />
+            <label htmlFor="history-type" className="sr-only">Filter by type</label>
+            <select id="history-type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={selectCls}>
+              <option value="all">All types</option>
+              {typeOptions.map((t) => (
+                <option key={t} value={t}>{TYPE_META[t]?.label || t}</option>
+              ))}
+            </select>
+            <label htmlFor="history-level" className="sr-only">Filter by risk level</label>
+            <select id="history-level" value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} className={selectCls}>
+              <option value="all">All risk levels</option>
+              {LEVELS.map((l) => (
+                <option key={l} value={l}>{l.charAt(0) + l.slice(1).toLowerCase()}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={fetchHistory}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium transition-colors hover:bg-surface-2 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {loading && !historyData ? (
-          <div className="p-12 text-center text-slate-400 space-y-3">
-            <RefreshCw className="w-8 h-8 animate-spin mx-auto text-slate-500" />
-            <p className="text-sm">Loading audit logs...</p>
+          <p className="p-10 text-center text-sm text-muted">Loading scan history…</p>
+        ) : allScans.length === 0 ? (
+          <div className="p-10 text-center">
+            <p className="text-sm font-medium">No scans yet</p>
+            <p className="mt-1 text-xs text-muted">Run a URL, message, or QR scan and it will show up here.</p>
           </div>
-        ) : historyData?.scans?.length === 0 ? (
-          <div className="p-12 text-center text-slate-500 space-y-2">
-            <FileText className="w-8 h-8 mx-auto text-slate-600 opacity-50" />
-            <p className="text-sm font-medium">No scan audit logs recorded yet.</p>
-            <p className="text-xs text-slate-600">Run a URL, QR, or Phishing message scan to generate audit telemetry.</p>
+        ) : rows.length === 0 ? (
+          <div className="p-10 text-center">
+            <p className="text-sm font-medium">No scans match these filters</p>
+            {filtersActive && (
+              <button type="button" onClick={clearFilters} className="mt-2 text-sm text-accent underline underline-offset-2">
+                Clear filters
+              </button>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
+            <table className="w-full min-w-[640px] text-sm">
               <thead>
-                <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
-                  <th className="py-3.5 px-4"># ID</th>
-                  <th className="py-3.5 px-4">Timestamp</th>
-                  <th className="py-3.5 px-4">Type</th>
-                  <th className="py-3.5 px-4">Target Payload</th>
-                  <th className="py-3.5 px-4">Risk Assessment</th>
-                  <th className="py-3.5 px-4 text-right">Details</th>
+                <tr className="border-b border-line bg-surface-2 text-xs text-muted">
+                  <SortHeader label="Timestamp" k="createdAt" sort={sort} onSort={onSort} />
+                  <SortHeader label="Type" k="scanType" sort={sort} onSort={onSort} />
+                  <SortHeader label="Target" k="target" sort={sort} onSort={onSort} />
+                  <SortHeader label="Risk" k="riskScore" sort={sort} onSort={onSort} />
+                  <th scope="col" className="w-10 px-4 py-2"><span className="sr-only">Details</span></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {historyData?.scans?.map((rawScan) => {
-                  const scan = normalizeScan(rawScan)
-                  const isExpanded = expandedRow === scan.id
+              <tbody>
+                {rows.map((scan) => {
+                  const isOpen = expandedRow === scan.id
+                  const detailId = `scan-detail-${scan.id}`
                   return (
                     <React.Fragment key={scan.id}>
                       <tr
-                        onClick={() => setExpandedRow(isExpanded ? null : scan.id)}
-                        className="hover:bg-slate-800/40 cursor-pointer transition-colors"
+                        onClick={() => setExpandedRow(isOpen ? null : scan.id)}
+                        className="cursor-pointer border-b border-line transition-colors hover:bg-surface-2"
                       >
-                        <td className="py-3.5 px-4 font-mono text-slate-500">#{scan.id}</td>
-                        <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap">
-                          {formatDate(scan.createdAt)}
+                        <td className="whitespace-nowrap px-4 py-2.5 text-muted">{formatDate(scan.createdAt)}</td>
+                        <td className="px-4 py-2.5"><TypeTag type={scan.scanType} /></td>
+                        <td className="max-w-xs truncate px-4 py-2.5 font-mono text-xs" title={scan.target}>
+                          {scan.target || '(empty)'}
                         </td>
-                        <td className="py-3.5 px-4">{getTypeIcon(scan.scanType)}</td>
-                        <td className="py-3.5 px-4 font-mono text-slate-200 max-w-xs truncate" title={scan.target}>
-                          {scan.target || '<empty>'}
+                        <td className="px-4 py-2.5">
+                          <span className="inline-flex items-center gap-2">
+                            <SeverityBadge level={scan.riskLevel} />
+                            <span className="tabular-nums text-muted">{scan.riskScore}</span>
+                          </span>
                         </td>
-                        <td className="py-3.5 px-4">
-                          {getRiskBadge(scan.riskLevel, scan.riskScore)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right text-slate-500">
+                        <td className="px-4 py-2.5 text-muted">
+                          {/* No onClick here: the click bubbles up to the row, so mouse and keyboard both work */}
                           <button
                             type="button"
-                            className="p-1 hover:text-slate-300 rounded"
-                            aria-label="Toggle details"
+                            aria-expanded={isOpen}
+                            aria-controls={detailId}
+                            aria-label={isOpen ? 'Hide scan details' : 'Show scan details'}
+                            className="rounded p-1 hover:text-fg"
                           >
-                            {isExpanded ? (
-                              <ChevronUp className="w-4 h-4" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4" />
-                            )}
+                            {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           </button>
                         </td>
                       </tr>
-                      {isExpanded && (
-                        <tr className="bg-slate-950/60 border-b border-slate-800/80">
-                          <td colSpan={6} className="py-4 px-6 space-y-3">
+
+                      {isOpen && (
+                        <tr id={detailId} className="border-b border-line bg-surface-2">
+                          <td colSpan={5} className="space-y-4 px-4 py-4">
                             <div>
-                              <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px] block mb-1">
-                                AI Explainer Summary:
-                              </span>
-                              <p className="text-slate-200 text-xs bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                                {scan.summary || 'No summary available.'}
-                              </p>
+                              <h4 className="mb-1 text-xs font-semibold text-muted">AI summary</h4>
+                              <p className="whitespace-pre-wrap text-sm">{scan.summary || 'No summary was saved for this scan.'}</p>
                             </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Severity</span>
-                                <span className="text-sm font-bold text-slate-200">{scan.riskLevel}</span>
+
+                            <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                              <div>
+                                <dt className="text-xs text-muted">Severity</dt>
+                                <dd className="mt-0.5"><SeverityBadge level={scan.riskLevel} /></dd>
                               </div>
-                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Composite Score</span>
-                                <span className="text-sm font-bold text-slate-200">{scan.riskScore}/100</span>
+                              <div>
+                                <dt className="text-xs text-muted">Composite score</dt>
+                                <dd className="text-sm font-medium tabular-nums">{scan.riskScore}/100</dd>
                               </div>
-                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">Heuristic Score</span>
-                                <span className="text-sm font-bold text-slate-200">
-                                  {scan.heuristicScore !== null && scan.heuristicScore !== undefined ? scan.heuristicScore : 'N/A'}
-                                </span>
+                              <div>
+                                <dt className="text-xs text-muted">Heuristic score</dt>
+                                <dd className="text-sm font-medium tabular-nums">
+                                  {scan.heuristicScore ?? 'N/A'}
+                                </dd>
                               </div>
-                              <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800">
-                                <span className="text-[10px] uppercase tracking-wider text-slate-500 block">ML Probability</span>
-                                <span className="text-sm font-bold text-slate-200">
-                                  {scan.mlProbability !== null && scan.mlProbability !== undefined ? `${(scan.mlProbability * 100).toFixed(1)}%` : 'N/A'}
-                                </span>
+                              <div>
+                                <dt className="text-xs text-muted">ML probability</dt>
+                                <dd className="text-sm font-medium tabular-nums">
+                                  {scan.mlProbability != null ? `${(scan.mlProbability * 100).toFixed(1)}%` : 'N/A'}
+                                </dd>
                               </div>
-                            </div>
+                            </dl>
+
                             {scan.evidence && (
                               <div>
-                                <span className="text-slate-400 font-semibold uppercase tracking-wider text-[10px] block mb-1">
-                                  Evidence Snapshot (JSON):
-                                </span>
-                                <pre className="text-[11px] font-mono text-cyan-300 bg-slate-950 p-3 rounded-xl border border-slate-800 overflow-x-auto max-h-40">
+                                <h4 className="mb-1 text-xs font-semibold text-muted">Evidence (JSON)</h4>
+                                <pre className="max-h-60 overflow-auto rounded-md border border-line bg-surface p-3 font-mono text-xs">
                                   {JSON.stringify(scan.evidence, null, 2)}
                                 </pre>
                               </div>
@@ -353,8 +332,7 @@ export default function HistoryTab() {
             </table>
           </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }
-

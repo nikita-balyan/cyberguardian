@@ -1,16 +1,37 @@
 import React, { useState } from 'react'
+import { Upload, Download, AlertCircle, Loader2 } from 'lucide-react'
+import SeverityBadge from './SeverityBadge'
 import { scanBatch } from '../services/api'
-import {
-  Layers,
-  Upload,
-  FileText,
-  Download,
-  AlertTriangle,
-  CheckCircle,
-  Shield,
-  Search,
-  Loader2
-} from 'lucide-react'
+
+const MAX_ITEMS = 50
+const FILTERS = ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
+
+function Segmented({ label, options, value, onChange }) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex rounded-md border border-line bg-surface-2 p-0.5 text-sm">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={`rounded px-3 py-1 font-medium transition-colors ${
+            value === o.value ? 'bg-surface text-fg shadow-sm' : 'text-muted hover:text-fg'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// Stops spreadsheet apps from running a cell that starts with = + - @ as a formula
+const csvCell = (v) => {
+  let s = String(v ?? '')
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s
+  return '"' + s.replace(/"/g, '""') + '"'
+}
 
 export default function BatchScanner() {
   const [scanType, setScanType] = useState('url')
@@ -39,351 +60,266 @@ export default function BatchScanner() {
     .split('\n')
     .map((i) => i.trim())
     .filter((i) => i && !i.startsWith('#'))
-  const isOverLimit = itemsList.length > 50
+  const isOverLimit = itemsList.length > MAX_ITEMS
 
   const handleRunBatchScan = async (e) => {
     e.preventDefault()
     setError(null)
     if (itemsList.length === 0) {
-      setError('Please enter at least one target item or upload a file.')
+      setError('Enter at least one target, or upload a file.')
       return
     }
-    if (itemsList.length > 50) {
-      setError('Batch limit exceeded. Maximum 50 items allowed.')
+    if (isOverLimit) {
+      setError(`Too many targets. The limit is ${MAX_ITEMS} per batch.`)
       return
     }
     setLoading(true)
     try {
-      const data = await scanBatch(itemsList, scanType)
-      setBatchResult(data)
+      setBatchResult(await scanBatch(itemsList, scanType))
+      setRiskFilter('ALL')
+      setSearchQuery('')
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Batch scan failed.')
+      setError(err.message || 'The batch scan failed.')
     } finally {
       setLoading(false)
     }
   }
 
   const handleExportCSV = () => {
-    if (!batchResult || !batchResult.results) return
+    if (!batchResult?.results) return
     const headers = ['Target', 'Risk Level', 'Risk Score', 'Threat Intel Flagged', 'Flags Count', 'Summary']
     const rows = batchResult.results.map((r) => [
-      '"' + (r.target || '').replace(/"/g, '""') + '"',
-      r.risk_level,
-      r.risk_score,
-      r.threat_intel_flagged ? 'YES' : 'NO',
-      r.flags_count,
-      '"' + (r.summary || '').replace(/"/g, '""') + '"'
+      csvCell(r.target),
+      csvCell(r.risk_level),
+      csvCell(r.risk_score),
+      csvCell(r.threat_intel_flagged ? 'YES' : 'NO'),
+      csvCell(r.flags_count),
+      csvCell(r.summary),
     ])
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
+    const csv = [headers.map(csvCell).join(','), ...rows.map((r) => r.join(','))].join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }))
     const link = document.createElement('a')
     link.href = url
     link.download = `cyberguardian_batch_${scanType}_${Date.now()}.csv`
     document.body.appendChild(link)
     link.click()
-    document.body.removeChild(link)
+    link.remove()
+    URL.revokeObjectURL(url)
   }
 
-  const filteredResults =
-    batchResult?.results?.filter((r) => {
-      const matchesRisk =
-        riskFilter === 'ALL' ||
-        (riskFilter === 'HIGH' && (r.risk_level === 'HIGH' || r.risk_level === 'CRITICAL')) ||
-        r.risk_level === riskFilter
-      const matchesSearch =
-        r.target.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (r.summary && r.summary.toLowerCase().includes(searchQuery.toLowerCase()))
-      return matchesRisk && matchesSearch
-    }) || []
+  const results = batchResult?.results || []
+  const q = searchQuery.trim().toLowerCase()
+  const filteredResults = results.filter((r) => {
+    const level = String(r.risk_level || '').toUpperCase()
+    const matchesRisk = riskFilter === 'ALL' || level === riskFilter
+    const matchesSearch =
+      !q || String(r.target || '').toLowerCase().includes(q) || String(r.summary || '').toLowerCase().includes(q)
+    return matchesRisk && matchesSearch
+  })
 
-  const totalItems = batchResult ? batchResult.total_items : itemsList.length
-  const highRiskCount =
-    batchResult?.results?.filter((r) => r.risk_level === 'HIGH' || r.risk_level === 'CRITICAL').length || 0
-  const mediumRiskCount = batchResult?.results?.filter((r) => r.risk_level === 'MEDIUM').length || 0
-  const lowRiskCount = batchResult?.results?.filter((r) => r.risk_level === 'LOW').length || 0
+  const count = (...levels) => results.filter((r) => levels.includes(String(r.risk_level || '').toUpperCase())).length
+  const stats = [
+    { id: 'total', label: 'Total targets', value: batchResult?.total_items ?? results.length },
+    { id: 'high', level: 'HIGH', label: 'High / critical', value: count('HIGH', 'CRITICAL') },
+    { id: 'medium', level: 'MEDIUM', label: 'Medium', value: count('MEDIUM') },
+    { id: 'low', level: 'LOW', label: 'Low', value: count('LOW') },
+  ]
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto">
-      {/* Header Controls Card */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-md">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-              <Layers className="w-5 h-5 text-indigo-400" />
-              <span>Multi-Target Batch Threat Scanner</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Bulk triage up to 50 URLs or messages concurrently with live threat intelligence and automated risk scoring.
-            </p>
-          </div>
-
-          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-            <button
-              type="button"
-              onClick={() => setScanType('url')}
-              className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
-                scanType === 'url' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Scan URLs
-            </button>
-            <button
-              type="button"
-              onClick={() => setScanType('message')}
-              className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
-                scanType === 'message' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Scan Messages
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Input Selection & Form Card */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-md">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-2 text-sm font-semibold text-slate-200">
-            <FileText className="w-4 h-4 text-indigo-400" />
-            <span>Target Inputs</span>
-          </div>
-
-          <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-            <button
-              type="button"
-              onClick={() => setInputType('textarea')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                inputType === 'textarea' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Multiline Text
-            </button>
-            <button
-              type="button"
-              onClick={() => setInputType('file')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
-                inputType === 'file' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              File Upload (.txt / .csv)
-            </button>
-          </div>
+    <div className="space-y-4">
+      <div className="rounded-lg border border-line bg-surface p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <Segmented
+            label="Scan type"
+            value={scanType}
+            onChange={setScanType}
+            options={[
+              { value: 'url', label: 'URLs' },
+              { value: 'message', label: 'Messages' },
+            ]}
+          />
+          <Segmented
+            label="Input method"
+            value={inputType}
+            onChange={setInputType}
+            options={[
+              { value: 'textarea', label: 'Paste text' },
+              { value: 'file', label: 'Upload file' },
+            ]}
+          />
         </div>
 
-        <form onSubmit={handleRunBatchScan} className="space-y-4">
+        <form onSubmit={handleRunBatchScan} noValidate>
           {inputType === 'textarea' ? (
-            <textarea
-              rows={6}
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder={
-                scanType === 'url'
-                  ? 'Enter one URL per line (e.g. https://google.com\nhttp://paypal-security-update.xyz/login\nhttps://github.com)'
-                  : 'Enter one message per line\nURGENT: Verify your account immediately at http://phish.com\nYour order #123 has shipped.'
-              }
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+            <>
+              <label htmlFor="batch-input" className="mb-1.5 block text-sm font-medium">
+                {scanType === 'url' ? 'URLs, one per line' : 'Messages, one per line'}
+              </label>
+              <textarea
+                id="batch-input"
+                rows={7}
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                spellCheck={false}
+                placeholder={
+                  scanType === 'url'
+                    ? 'https://example.com\nhttp://paypal-security-update.xyz/login'
+                    : 'URGENT: Verify your account at http://phish.example\nYour order #123 has shipped.'
+                }
+                className="w-full resize-y rounded-md border border-line bg-bg px-3 py-2 font-mono text-xs placeholder:text-muted focus:border-accent"
+              />
+            </>
           ) : (
-            <div className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-2xl p-8 text-center transition-all bg-slate-950/50">
+            <>
               <input
                 type="file"
                 accept=".txt,.csv"
                 onChange={handleFileUpload}
-                className="hidden"
+                className="sr-only"
                 id="batch-file-input"
               />
-              <label htmlFor="batch-file-input" className="cursor-pointer flex flex-col items-center space-y-3">
-                <div className="p-3 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                  <Upload className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-white">
-                    {fileName ? `Loaded: ${fileName}` : 'Click to select or drag & drop a .txt or .csv file'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">One target per line (up to 50 items max)</p>
-                </div>
+              <label
+                htmlFor="batch-file-input"
+                className="flex cursor-pointer flex-col items-center gap-2 rounded-md border border-dashed border-line px-6 py-10 text-center transition-colors hover:bg-surface-2 focus-within:ring-2 focus-within:ring-accent"
+              >
+                <Upload className="h-5 w-5 text-muted" aria-hidden="true" />
+                <span className="text-sm font-medium">
+                  {fileName ? `Loaded: ${fileName}` : 'Choose a .txt or .csv file'}
+                </span>
+                <span className="text-xs text-muted">One target per line. Lines starting with # are ignored.</span>
               </label>
-            </div>
+            </>
           )}
 
-          <div className="flex items-center justify-between text-xs">
-            <span className={`font-semibold ${isOverLimit ? 'text-rose-400' : 'text-slate-400'}`}>
-              Detected targets: {itemsList.length} / 50 max
-            </span>
-            {isOverLimit && (
-              <span className="text-rose-400 font-medium flex items-center space-x-1">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>Limit exceeded (max 50). Please remove extra lines.</span>
-              </span>
-            )}
-          </div>
-
-          {error && (
-            <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs flex items-center space-x-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <div className="flex justify-end pt-2">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p className={`text-xs ${isOverLimit ? 'font-medium text-sev-critical' : 'text-muted'}`}>
+              {itemsList.length} of {MAX_ITEMS} targets
+              {isOverLimit && ' · Remove extra lines to continue'}
+            </p>
             <button
               type="submit"
               disabled={loading || isOverLimit || itemsList.length === 0}
-              className="inline-flex items-center space-x-2 px-6 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Analyzing {itemsList.length} Targets Concurrently...</span>
-                </>
-              ) : (
-                <>
-                  <Shield className="w-4 h-4" />
-                  <span>Run Batch Threat Scan</span>
-                </>
-              )}
+              {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {loading ? `Scanning ${itemsList.length} targets…` : 'Run batch scan'}
             </button>
           </div>
+
+          {error && (
+            <div role="alert" className="mt-4 flex items-start gap-2 rounded-md bg-sev-critical-bg p-3 text-sm text-sev-critical">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <span>{error}</span>
+            </div>
+          )}
         </form>
       </div>
 
-      {/* Batch Results Section */}
       {batchResult && (
-        <div className="space-y-6 animate-fadeIn">
-          {/* Summary Metric Counters */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur-md">
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Targets</p>
-              <p className="text-3xl font-black text-white mt-1">{totalItems}</p>
-            </div>
-            <div className="bg-slate-900/80 border border-rose-900/40 rounded-2xl p-5 shadow-xl backdrop-blur-md">
-              <p className="text-xs font-semibold text-rose-400 uppercase tracking-wider">Critical / High Risk</p>
-              <p className="text-3xl font-black text-rose-400 mt-1">{highRiskCount}</p>
-            </div>
-            <div className="bg-slate-900/80 border border-amber-900/40 rounded-2xl p-5 shadow-xl backdrop-blur-md">
-              <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Medium Risk</p>
-              <p className="text-3xl font-black text-amber-400 mt-1">{mediumRiskCount}</p>
-            </div>
-            <div className="bg-slate-900/80 border border-emerald-900/40 rounded-2xl p-5 shadow-xl backdrop-blur-md">
-              <p className="text-xs font-semibold text-emerald-400 uppercase tracking-wider">Low Risk</p>
-              <p className="text-3xl font-black text-emerald-400 mt-1">{lowRiskCount}</p>
-            </div>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {stats.map((s) => (
+              <div key={s.id} className="rounded-lg border border-line bg-surface p-4">
+                {s.level ? (
+                  <SeverityBadge level={s.level} label={s.label} />
+                ) : (
+                  <span className="text-xs font-medium text-muted">{s.label}</span>
+                )}
+                <p className="mt-2 text-2xl font-semibold tabular-nums">{s.value}</p>
+              </div>
+            ))}
           </div>
 
-          {/* Filter, Search & Export Actions */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 shadow-xl backdrop-blur-md flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-              <div className="relative flex-1 md:w-64">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <section className="rounded-lg border border-line bg-surface" aria-label="Batch results">
+            <div className="flex flex-col gap-3 border-b border-line p-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold">Results</h3>
+                <p className="text-xs text-muted">
+                  Showing {filteredResults.length} of {results.length}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="batch-search" className="sr-only">Search results</label>
                 <input
-                  type="text"
+                  id="batch-search"
+                  type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search targets or summaries..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="Search targets or summaries"
+                  className="w-52 rounded-md border border-line bg-bg px-2.5 py-1.5 text-sm placeholder:text-muted focus:border-accent"
                 />
-              </div>
-
-              <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
-                {['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((lvl) => (
-                  <button
-                    key={lvl}
-                    type="button"
-                    onClick={() => setRiskFilter(lvl)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
-                      riskFilter === lvl ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {lvl}
-                  </button>
-                ))}
+                <label htmlFor="batch-risk" className="sr-only">Filter by risk level</label>
+                <select
+                  id="batch-risk"
+                  value={riskFilter}
+                  onChange={(e) => setRiskFilter(e.target.value)}
+                  className="rounded-md border border-line bg-bg px-2.5 py-1.5 text-sm focus:border-accent"
+                >
+                  {FILTERS.map((f) => (
+                    <option key={f} value={f}>
+                      {f === 'ALL' ? 'All risk levels' : f.charAt(0) + f.slice(1).toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleExportCSV}
+                  disabled={results.length === 0}
+                  className="inline-flex items-center gap-2 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium transition-colors hover:bg-surface-2 disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                  Export CSV
+                </button>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleExportCSV}
-              disabled={!batchResult || !batchResult.results}
-              className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 font-semibold text-xs transition-all w-full md:w-auto justify-center disabled:opacity-50"
-            >
-              <Download className="w-4 h-4" />
-              <span>Export Batch Results to CSV</span>
-            </button>
-          </div>
-
-          {/* Forensic Results Table */}
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl shadow-xl backdrop-blur-md overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-slate-950/60 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    <th className="py-3.5 px-6">Risk Severity</th>
-                    <th className="py-3.5 px-6">Target</th>
-                    <th className="py-3.5 px-6">Threat Intel Hit</th>
-                    <th className="py-3.5 px-6">Flags</th>
-                    <th className="py-3.5 px-6">Key Finding Summary</th>
+                  <tr className="border-b border-line bg-surface-2 text-left text-xs text-muted">
+                    <th scope="col" className="px-4 py-2 font-medium">Risk</th>
+                    <th scope="col" className="px-4 py-2 font-medium">Target</th>
+                    <th scope="col" className="px-4 py-2 font-medium">Threat feeds</th>
+                    <th scope="col" className="px-4 py-2 font-medium">Flags</th>
+                    <th scope="col" className="px-4 py-2 font-medium">Summary</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/60 text-sm">
+                <tbody>
                   {filteredResults.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-slate-500 text-xs">
-                        No batch targets matching current filter/search.
+                      <td colSpan={5} className="px-4 py-8 text-center text-sm text-muted">
+                        No results match these filters.
                       </td>
                     </tr>
                   ) : (
                     filteredResults.map((res, idx) => (
-                      <tr key={idx} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="py-4 px-6 whitespace-nowrap">
-                          <div className="flex items-center space-x-2">
-                            <span
-                              className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                                res.risk_level === 'CRITICAL'
-                                  ? 'bg-rose-950 text-rose-400 border border-rose-800'
-                                  : res.risk_level === 'HIGH'
-                                  ? 'bg-red-950 text-red-400 border border-red-800'
-                                  : res.risk_level === 'MEDIUM'
-                                  ? 'bg-amber-950 text-amber-400 border border-amber-800'
-                                  : 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                              }`}
-                            >
-                              {res.risk_level}
-                            </span>
-                            <span className="text-xs font-mono font-bold text-slate-300">
-                              {res.risk_score}/100
-                            </span>
-                          </div>
+                      <tr key={idx} className="border-b border-line last:border-b-0 align-top">
+                        <td className="whitespace-nowrap px-4 py-2.5">
+                          <span className="inline-flex items-center gap-2">
+                            <SeverityBadge level={res.risk_level} />
+                            <span className="tabular-nums text-muted">{res.risk_score}</span>
+                          </span>
                         </td>
-                        <td className="py-4 px-6 font-mono text-xs text-slate-200 max-w-xs truncate" title={res.target}>
+                        <td className="max-w-xs truncate px-4 py-2.5 font-mono text-xs" title={res.target}>
                           {res.target}
                         </td>
-                        <td className="py-4 px-6 whitespace-nowrap">
+                        <td className="whitespace-nowrap px-4 py-2.5">
                           {res.threat_intel_flagged ? (
-                            <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-950/60 text-rose-400 border border-rose-800/50">
-                              <AlertTriangle className="w-3 h-3" />
-                              <span>Flagged</span>
-                            </span>
+                            <SeverityBadge level="CRITICAL" label="Flagged" />
                           ) : (
-                            <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">
-                              <CheckCircle className="w-3 h-3" />
-                              <span>Clean</span>
-                            </span>
+                            <SeverityBadge level="LOW" label="Clean" />
                           )}
                         </td>
-                        <td className="py-4 px-6 whitespace-nowrap font-mono text-xs text-slate-400">
-                          {res.flags_count} flags
-                        </td>
-                        <td className="py-4 px-6 text-xs text-slate-400 max-w-md">
-                          {res.summary}
-                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">{res.flags_count}</td>
+                        <td className="max-w-md px-4 py-2.5 text-muted">{res.summary}</td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         </div>
       )}
     </div>

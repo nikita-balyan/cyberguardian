@@ -1,148 +1,213 @@
-import React, { useState } from 'react'
-import { ChevronDown, ChevronUp, Database, ShieldCheck, ShieldAlert } from 'lucide-react'
+import React, { useState, useEffect, useRef } from 'react'
+import { Database, X, Copy, Check, ChevronRight } from 'lucide-react'
+import SeverityBadge from './SeverityBadge'
+
+function Row({ label, children }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-t border-line py-2.5 text-sm first:border-t-0">
+      <dt className="text-muted">{label}</dt>
+      <dd className="text-right font-medium">{children}</dd>
+    </div>
+  )
+}
 
 export default function EvidenceInspector({ evidence }) {
-  const [isOpen, setIsOpen] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const closeRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => e.key === 'Escape' && setOpen(false)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', onKey)
+    closeRef.current?.focus()
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
 
   if (!evidence) return null
 
+  const json = JSON.stringify(evidence, null, 2)
+  const ti = evidence.threat_intel
+  const feeds = ti?.sources
+    ? [
+        ['URLhaus', ti.sources.urlhaus],
+        ['Google Safe Browsing', ti.sources.google_safebrowsing],
+      ].filter(([, src]) => src)
+    : []
+
+  // URL scans have these fields. Message and QR scans usually don't, so we hide the section.
+  const hasDetails =
+    evidence.domain_age_days !== undefined ||
+    evidence.ssl_valid !== undefined ||
+    evidence.redirect_count !== undefined
+
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(json)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      /* clipboard blocked: user can still select the text */
+    }
+  }
+
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-sm shadow-xl">
+    <>
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-slate-800/40 transition-colors"
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center justify-between gap-3 rounded-lg border border-line bg-surface px-5 py-3 text-left transition-colors hover:bg-surface-2"
       >
-        <div className="flex items-center space-x-3">
-          <div className="bg-slate-800 p-2 rounded-xl text-slate-300">
-            <Database className="w-4 h-4" />
-          </div>
-          <div>
-            <h4 className="text-sm font-bold text-white">Raw Evidence Inspector</h4>
-            <p className="text-xs text-slate-400">View underlying technical scan telemetry & attributes</p>
-          </div>
-        </div>
-        <div className="flex items-center space-x-2 text-slate-400 text-xs font-medium">
-          <span>{isOpen ? 'Hide Details' : 'View Details'}</span>
-          {isOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </div>
+        <span className="flex items-center gap-3">
+          <Database className="h-4 w-4 text-muted" aria-hidden="true" />
+          <span>
+            <span className="block text-sm font-semibold">Raw evidence</span>
+            <span className="block text-xs text-muted">Scan details, threat feed results, and the full JSON</span>
+          </span>
+        </span>
+        <ChevronRight className="h-4 w-4 text-muted" aria-hidden="true" />
       </button>
 
-      {isOpen && (
-        <div className="px-6 pb-6 pt-2 border-t border-slate-800 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {evidence.domain_age_days !== undefined && (
-              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs text-slate-400 block font-medium">Domain Age</span>
-                <span className="text-sm font-bold text-slate-200 mt-1 block">
-                  {evidence.domain_age_days !== null ? `${evidence.domain_age_days} days` : 'Unknown'}
-                </span>
-              </div>
-            )}
+      {open && (
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Raw evidence">
+          <div className="absolute inset-0 bg-slate-900/50" onClick={() => setOpen(false)} />
 
-            {evidence.ssl_valid !== undefined && (
-              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs text-slate-400 block font-medium">SSL Status</span>
-                <span className="text-sm font-bold mt-1 flex items-center space-x-1.5">
-                  {evidence.ssl_valid ? (
-                    <>
-                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                      <span className="text-emerald-400">Valid</span>
-                    </>
-                  ) : (
-                    <>
-                      <ShieldAlert className="w-4 h-4 text-rose-400" />
-                      <span className="text-rose-400">Invalid / None</span>
-                    </>
-                  )}
-                </span>
-              </div>
-            )}
+          <aside className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-line bg-surface shadow-xl">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-line px-5">
+              <h3 className="text-sm font-semibold">Raw evidence</h3>
+              <button
+                ref={closeRef}
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label="Close evidence panel"
+                className="rounded-md p-2 text-muted hover:bg-surface-2 hover:text-fg"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
 
-            {evidence.redirect_count !== undefined && (
-              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs text-slate-400 block font-medium">Redirects</span>
-                <span className="text-sm font-bold text-slate-200 mt-1 block">
-                  {evidence.redirect_count} hops
-                </span>
-              </div>
-            )}
-
-            {evidence.threat_intel !== undefined && evidence.threat_intel !== null ? (
-              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800 sm:col-span-2 md:col-span-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-400 block font-medium">External Threat Intelligence (URLhaus & Safe Browsing)</span>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-bold flex items-center space-x-1 ${evidence.threat_intel.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}>
-                    {evidence.threat_intel.flagged ? (
-                      <>
-                        <ShieldAlert className="w-3.5 h-3.5" />
-                        <span>FLAGGED BY THREAT FEEDS</span>
-                      </>
-                    ) : (
-                      <>
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>BENIGN / CLEAN</span>
-                      </>
+            <div className="flex-1 space-y-6 overflow-y-auto p-5">
+              {/* Scan details */}
+              {hasDetails && (
+                <div>
+                  <h4 className="mb-1 text-sm font-semibold">Scan details</h4>
+                  <dl>
+                    {evidence.domain_age_days !== undefined && (
+                      <Row label="Domain age">
+                        {evidence.domain_age_days !== null ? `${evidence.domain_age_days} days` : 'Unknown'}
+                      </Row>
                     )}
-                  </span>
+                    {evidence.ssl_valid !== undefined && (
+                      <Row label="SSL certificate">
+                        {evidence.ssl_valid ? (
+                          <SeverityBadge level="LOW" label="Valid" />
+                        ) : (
+                          <SeverityBadge level="HIGH" label="Invalid or none" />
+                        )}
+                      </Row>
+                    )}
+                    {evidence.redirect_count !== undefined && (
+                      <Row label="Redirects">{evidence.redirect_count} hops</Row>
+                    )}
+                  </dl>
                 </div>
+              )}
 
-                {evidence.threat_intel.flagged && evidence.threat_intel.threat_summary && evidence.threat_intel.threat_summary.length > 0 && (
-                  <div className="p-3 bg-rose-950/50 border border-rose-900/70 rounded-xl text-xs text-rose-300 space-y-1">
-                    <span className="font-bold uppercase tracking-wider block text-rose-400">Threat Feed Alert Summary:</span>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      {evidence.threat_intel.threat_summary.map((summary, idx) => (
-                        <li key={idx}>{summary}</li>
-                      ))}
-                    </ul>
+              {/* Threat intelligence */}
+              {ti != null ? (
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold">Threat intelligence</h4>
+                    {ti.flagged ? (
+                      <SeverityBadge level="CRITICAL" label="Flagged by threat feeds" />
+                    ) : (
+                      <SeverityBadge level="LOW" label="Clean" />
+                    )}
                   </div>
-                )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                  {evidence.threat_intel.sources?.urlhaus && (
-                    <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-slate-200 block">URLhaus Feed</span>
-                        <span className="text-[11px] text-slate-400">Status: {evidence.threat_intel.sources.urlhaus.status}</span>
-                      </div>
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${evidence.threat_intel.sources.urlhaus.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/15 text-emerald-400'}`}>
-                        {evidence.threat_intel.sources.urlhaus.flagged ? 'Flagged' : 'Clean'}
-                      </span>
+                  {ti.flagged && ti.threat_summary && ti.threat_summary.length > 0 && (
+                    <div className="mb-3 rounded-md bg-sev-critical-bg p-3 text-xs text-sev-critical">
+                      <p className="mb-1 font-semibold">Feed alerts</p>
+                      <ul className="list-disc space-y-0.5 pl-4">
+                        {ti.threat_summary.map((s, idx) => (
+                          <li key={idx}>{s}</li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
-                  {evidence.threat_intel.sources?.google_safebrowsing && (
-                    <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-bold text-slate-200 block">Google Safe Browsing</span>
-                        <span className="text-[11px] text-slate-400">Status: {evidence.threat_intel.sources.google_safebrowsing.status}</span>
-                      </div>
-                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${evidence.threat_intel.sources.google_safebrowsing.flagged ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-emerald-500/15 text-emerald-400'}`}>
-                        {evidence.threat_intel.sources.google_safebrowsing.flagged ? 'Flagged' : 'Clean / Unconfigured'}
-                      </span>
+                  {feeds.length > 0 && (
+                    <div className="overflow-x-auto rounded-md border border-line">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-surface-2 text-left text-xs text-muted">
+                            <th scope="col" className="px-3 py-2 font-medium">Feed</th>
+                            <th scope="col" className="px-3 py-2 font-medium">Status</th>
+                            <th scope="col" className="px-3 py-2 font-medium">Result</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {feeds.map(([name, src]) => (
+                            <tr key={name} className="border-t border-line">
+                              <td className="px-3 py-2 font-medium">{name}</td>
+                              <td className="px-3 py-2 text-muted">{src.status}</td>
+                              <td className="px-3 py-2">
+                                {src.flagged ? (
+                                  <SeverityBadge level="CRITICAL" label="Flagged" />
+                                ) : (
+                                  <SeverityBadge level="LOW" label="Clean" />
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
-              </div>
-            ) : evidence.safe_browsing_hit !== undefined && (
-              <div className="bg-slate-950/60 p-3.5 rounded-xl border border-slate-800">
-                <span className="text-xs text-slate-400 block font-medium">Threat Intel</span>
-                <span className={`text-sm font-bold mt-1 block ${evidence.safe_browsing_hit ? 'text-rose-400' : 'text-emerald-400'}`}>
-                  {evidence.safe_browsing_hit ? 'Threat Match' : 'Clean'}
-                </span>
-              </div>
-            )}
-          </div>
+              ) : (
+                evidence.safe_browsing_hit !== undefined && (
+                  <div>
+                    <h4 className="mb-1 text-sm font-semibold">Threat intelligence</h4>
+                    <dl>
+                      <Row label="Safe Browsing">
+                        {evidence.safe_browsing_hit ? (
+                          <SeverityBadge level="CRITICAL" label="Match" />
+                        ) : (
+                          <SeverityBadge level="LOW" label="Clean" />
+                        )}
+                      </Row>
+                    </dl>
+                  </div>
+                )
+              )}
 
-          <div className="mt-4">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block mb-2">
-              Raw JSON Telemetry
-            </span>
-            <pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-400 overflow-x-auto max-h-60">
-              {JSON.stringify(evidence, null, 2)}
-            </pre>
-          </div>
+              {/* Raw JSON */}
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold">Full JSON</h4>
+                  <button
+                    type="button"
+                    onClick={copyJson}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-2.5 py-1 text-xs font-medium hover:bg-surface-2"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                    {copied ? 'Copied' : 'Copy JSON'}
+                  </button>
+                </div>
+                <pre className="max-h-96 overflow-auto rounded-md border border-line bg-surface-2 p-4 font-mono text-xs">
+                  {json}
+                </pre>
+              </div>
+            </div>
+          </aside>
         </div>
       )}
-    </div>
+    </>
   )
 }
