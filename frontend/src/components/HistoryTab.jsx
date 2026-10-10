@@ -14,10 +14,16 @@ const TYPE_META = {
 
 const LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 
+// The backend stores messages as "text"; the UI calls them "message"
+const normalizeType = (raw) => {
+  const t = String(raw || 'unknown').toLowerCase()
+  return t === 'text' ? 'message' : t
+}
+
 // Maps any persisted schema (legacy or current) into a single shape.
 const normalizeScan = (scan) => ({
   id: scan.id,
-  scanType: String(scan.scan_type || scan.modality || 'unknown').toLowerCase(),
+  scanType: normalizeType(scan.scan_type || scan.modality),
   target: scan.target,
   riskLevel: (scan.risk_level || scan.severity_level || 'LOW').toUpperCase(),
   riskScore: scan.risk_score ?? scan.composite_risk_score ?? 0,
@@ -132,7 +138,7 @@ export default function HistoryTab() {
   const totalScans = historyData?.total_scans || 0
   const stats = [
     { id: 'total', label: 'Total scans', value: totalScans },
-    { id: 'high', level: 'HIGH', label: 'High / critical', value: pick('high') + pick('critical') },
+    { id: 'high', level: 'HIGH', label: 'High / critical', value: pick('high') },
     { id: 'medium', level: 'MEDIUM', label: 'Medium', value: pick('medium') },
     { id: 'low', level: 'LOW', label: 'Low', value: pick('low') },
   ]

@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
 import NewScan from './components/NewScan'
 import HistoryTab from './components/HistoryTab'
+import ReportsSettings from './components/ReportsSettings'
 import useTheme from './hooks/useTheme'
 
 const TITLES = {
@@ -40,9 +41,7 @@ export default function App() {
           <div className="mx-auto max-w-6xl">
             {page === 'scan' && <NewScan />}
             {page === 'history' && <HistoryTab />}
-            {page === 'reports' && (
-              <p className="text-sm text-muted">Exports and settings will appear here.</p>
-            )}
+            {page === 'reports' && <ReportsSettings theme={theme} onToggleTheme={toggle} />}
           </div>
         </main>
       </div>

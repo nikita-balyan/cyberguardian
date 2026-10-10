@@ -1,10 +1,14 @@
+#url_analyzer.py
+import asyncio
 import ipaddress
+import logging
+import re
 import socket
 import ssl
 from datetime import datetime, timezone
-import logging
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+
 import httpx
 import whois
 
@@ -13,28 +17,121 @@ from ..services.threat_intel import ThreatIntelService
 from ..ml.inference import predict_phishing_probability
 from ..ml.feature_extractor import extract_url_features
 
+try:  # bundled public-suffix snapshot, no network call
+    import tldextract
+    _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=())
+except Exception:  # pragma: no cover - fallback if the package isn't installed
+    _TLD_EXTRACT = None
+
 logger = logging.getLogger(__name__)
 
 SUSPICIOUS_TLDS = {".xyz", ".top", ".buzz", ".tk", ".cc", ".gq", ".ml", ".ga", ".work", ".loan", ".click"}
 POPULAR_BRANDS = ["sbi", "hdfc", "paytm", "google", "amazon", "paypal", "netflix", "apple", "microsoft", "icici"]
+LEGIT_BRAND_SUFFIXES = ("com", "in", "co.in")
+
+MAX_REDIRECTS = 5
+ALLOWED_PORTS = {None, 80, 443, 8080, 8443}
+FETCH_TOTAL_TIMEOUT = 8.0
+SSL_TIMEOUT = 5.0
+WHOIS_TIMEOUT = 6.0
+
+
+class BlockedTarget(ValueError):
+    """The target can't be scanned (private address, bad scheme, odd port...)."""
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def registered_domain(hostname: str) -> str:
+    """'shop.example.co.in' -> 'example.co.in' (falls back to the last two labels)."""
+    host = (hostname or "").lower().strip(".")
+    if not host:
+        return ""
+    if _TLD_EXTRACT is not None:
+        try:
+            return _TLD_EXTRACT(host).registered_domain or host
+        except Exception:
+            pass
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
+def _is_public_ip(ip) -> bool:
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_global
 
 
 def is_private_ip(hostname: str) -> bool:
+    """Legacy synchronous check, kept for backward compatibility.
+    analyze_url() uses resolve_public() instead."""
+    if not hostname:
+        return True
     if hostname.lower() == "localhost":
         return True
     try:
-        ip = ipaddress.ip_address(hostname)
-        return ip.is_private or ip.is_loopback or ip.is_link_local
+        return not _is_public_ip(ipaddress.ip_address(hostname))
     except ValueError:
-        # Not a raw IP string, check if resolves to private IP
-        try:
-            resolved_ip = socket.gethostbyname(hostname)
-            ip = ipaddress.ip_address(resolved_ip)
-            return ip.is_private or ip.is_loopback or ip.is_link_local
-        except Exception:
-            return False
+        pass
+    try:
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+        return any(not _is_public_ip(ipaddress.ip_address(i[4][0].split("%")[0])) for i in infos)
+    except Exception:
+        return False
 
 
+async def resolve_public(hostname: str) -> bool:
+    """True if the host resolves and EVERY address is public.
+    False if it doesn't resolve. Raises BlockedTarget if any address is
+    private, loopback, link-local, or otherwise reserved."""
+    if not hostname or hostname.lower() == "localhost":
+        raise BlockedTarget("Private and local addresses can't be scanned.")
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        if not _is_public_ip(ipaddress.ip_address(info[4][0].split("%")[0])):
+            raise BlockedTarget("Private and local addresses can't be scanned.")
+    return True
+
+
+async def safe_fetch(url: str) -> tuple[str, int]:
+    """Follow redirects manually, re-validating EVERY hop.
+    Only response headers are read, never the body. Returns (final_url, hops)."""
+    current, hops = url, 0
+    async with httpx.AsyncClient(follow_redirects=False, timeout=3.0) as client:
+        while True:
+            parsed = urlparse(current)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                raise BlockedTarget("Only http and https links can be scanned.")
+            if parsed.port not in ALLOWED_PORTS:
+                raise BlockedTarget("Links using unusual ports can't be scanned.")
+            if not await resolve_public(parsed.hostname):
+                return current, hops  # dead domain: keep analyzing, skip network probes
+            async with client.stream("GET", current) as resp:
+                location = resp.headers.get("location")
+                if resp.is_redirect and location and hops < MAX_REDIRECTS:
+                    current = urljoin(current, location)
+                    hops += 1
+                    continue
+                return str(resp.url), hops
+
+
+async def _in_thread(fn, *args, timeout: float, default):
+    """Run a blocking call off the event loop with a hard timeout."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=timeout)
+    except Exception as e:
+        logger.debug(f"{getattr(fn, '__name__', 'call')} failed or timed out: {e}")
+        return default
+
+
+# --------------------------------------------------------------------------- #
+# Individual checks
+# --------------------------------------------------------------------------- #
 def check_ssl(hostname: str) -> tuple[bool, Optional[str]]:
     try:
         context = ssl.create_default_context()
@@ -44,19 +141,17 @@ def check_ssl(hostname: str) -> tuple[bool, Optional[str]]:
                 if not cert:
                     return False, None
 
-                # Check expiration
-                not_after = cert.get('notAfter')
+                not_after = cert.get("notAfter")
                 if not_after:
-                    # Parse SSL expiration date and enforce UTC timezone
                     expiry_date = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
                     if datetime.now(timezone.utc) > expiry_date:
                         return False, "Expired SSL Certificate"
 
-                issuer = cert.get('issuer')
+                issuer = cert.get("issuer")
                 issuer_str = "Unknown"
                 if issuer:
                     for item in issuer:
-                        if item and item[0][0] == 'commonName':
+                        if item and item[0][0] == "commonName":
                             issuer_str = item[0][1]
                             break
                     if issuer_str == "Unknown" and len(issuer) > 0 and len(issuer[0]) > 0:
@@ -74,93 +169,89 @@ def get_domain_age_days(domain: str) -> Optional[int]:
         creation_date = w.creation_date
         if isinstance(creation_date, list):
             creation_date = creation_date[0]
-        if creation_date:
-            if isinstance(creation_date, datetime):
-                # Ensure creation_date is timezone-aware UTC for arithmetic comparison
-                if creation_date.tzinfo is None:
-                    creation_date = creation_date.replace(tzinfo=timezone.utc)
-                delta = datetime.now(timezone.utc) - creation_date
-                return max(0, delta.days)
+        if creation_date and isinstance(creation_date, datetime):
+            if creation_date.tzinfo is None:
+                creation_date = creation_date.replace(tzinfo=timezone.utc)
+            return max(0, (datetime.now(timezone.utc) - creation_date).days)
     except Exception as e:
         logger.debug(f"WHOIS lookup failed for {domain}: {e}")
     return None
 
 
+def _token_hits_brand(token: str, brand: str) -> bool:
+    if token == brand:
+        return True
+    # longer brands also match as a prefix or suffix ("paypalsecure", "securepaypal")
+    return len(brand) >= 5 and (token.startswith(brand) or token.endswith(brand))
+
+
 def check_brand_impersonation(hostname: str) -> bool:
-    hostname_lower = hostname.lower()
+    """Flags hosts that use a brand name but aren't that brand's own domain.
+    Matches whole word-tokens, so 'dsbistro.com' no longer trips the 'sbi' rule."""
+    host = (hostname or "").lower().strip(".")
+    if not host:
+        return False
+    reg = registered_domain(host)
+    tokens = {t for label in host.split(".") for t in re.split(r"[^a-z]+", label) if t}
     for brand in POPULAR_BRANDS:
-        if brand in hostname_lower:
-            if not hostname_lower.endswith(f"{brand}.com") and not hostname_lower.endswith(f"{brand}.in") and hostname_lower != f"www.{brand}.com" and hostname_lower != f"{brand}.com":
+        if any(_token_hits_brand(t, brand) for t in tokens):
+            legit = {f"{brand}.{suffix}" for suffix in LEGIT_BRAND_SUFFIXES}
+            if reg not in legit:
                 return True
     return False
 
 
+# --------------------------------------------------------------------------- #
+# Main entry point
+# --------------------------------------------------------------------------- #
 async def analyze_url(url: str) -> URLEvidence:
-    if not url.startswith(("http://", "https://")):
+    url = url.strip()
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", url):
         url = "https://" + url
+    elif not url.lower().startswith(("http://", "https://")):
+        raise BlockedTarget("Only http and https links can be scanned.")
 
     parsed = urlparse(url)
     hostname = parsed.hostname
-
     if not hostname:
         raise ValueError("Invalid URL: missing hostname")
 
-    # 1. Validate against SSRF
-    if is_private_ip(hostname):
-        raise ValueError("SSRF protection: Private IP ranges or localhost are not allowed.")
-
-    # 2. Check if hostname is a raw IP
-    is_ip = False
+    # Is the hostname a raw IP?
     try:
         ipaddress.ip_address(hostname)
         is_ip = True
     except ValueError:
         is_ip = False
 
-    # 3. Track HTTP redirect chains (max 5 hops) using httpx.AsyncClient with 3s timeout
+    # Follow redirects safely: every hop is re-checked against private ranges (SSRF)
     redirect_count = 0
     final_url = url
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=3.0) as client:
-            response = await client.get(url)
-            final_url = str(response.url)
-            redirect_count = len(response.history)
-            if redirect_count > 5:
-                redirect_count = 5
+        final_url, redirect_count = await asyncio.wait_for(safe_fetch(url), timeout=FETCH_TOTAL_TIMEOUT)
+    except BlockedTarget:
+        raise
     except Exception as e:
         logger.debug(f"HTTP request/redirect tracking failed for {url}: {e}")
 
-    # Parse final hostname for SSL & WHOIS
     final_parsed = urlparse(final_url)
     final_hostname = final_parsed.hostname or hostname
 
-    # 4. Check SSL certificate validity and issuer
-    ssl_valid, ssl_issuer = check_ssl(final_hostname)
+    # SSL and WHOIS are blocking, so run them in threads with timeouts
+    ssl_valid, ssl_issuer = await _in_thread(check_ssl, final_hostname, timeout=SSL_TIMEOUT, default=(False, None))
+    whois_domain = registered_domain(final_hostname) or final_hostname
+    domain_age_days = await _in_thread(get_domain_age_days, whois_domain, timeout=WHOIS_TIMEOUT, default=None)
 
-    # 5. Extract domain registration date using whois and calculate age in days
-    domain_parts = final_hostname.split('.')
-    if len(domain_parts) >= 2:
-        whois_domain = ".".join(domain_parts[-2:])
-    else:
-        whois_domain = final_hostname
-
-    domain_age_days = get_domain_age_days(whois_domain)
-
-    # 6. Flag suspicious TLDs
     suspicious_tld = any(final_hostname.endswith(tld) for tld in SUSPICIOUS_TLDS)
-
-    # 7. Basic brand-squatting detection
     brand_impersonation = check_brand_impersonation(final_hostname)
 
-    # 8. Threat Intelligence Lookup (URLhaus & Google Safe Browsing)
     threat_intel_service = ThreatIntelService()
     threat_intel = await threat_intel_service.lookup(final_url)
-    safe_browsing_hit = threat_intel.get("sources", {}).get("google_safebrowsing", {}).get("flagged", False) or threat_intel.get("flagged", False)
+    safe_browsing_hit = (
+        threat_intel.get("sources", {}).get("google_safebrowsing", {}).get("flagged", False)
+        or threat_intel.get("flagged", False)
+    )
 
-    # 9. Secondary ML Phishing Probability
     ml_probability = predict_phishing_probability(final_url)
-
-    # 10. Extract 12 lexical features for telemetry
     lexical_features = extract_url_features(final_url)
 
     return URLEvidence(
@@ -177,5 +268,3 @@ async def analyze_url(url: str) -> URLEvidence:
         ml_probability=ml_probability,
         lexical_features=lexical_features,
     )
-
-
