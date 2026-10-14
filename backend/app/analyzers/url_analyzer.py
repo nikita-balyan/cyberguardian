@@ -41,6 +41,11 @@ EXTRA_BRANDS = {
     "tiktok": {"tiktok.com", "tiktokv.com", "tiktokcdn.com"},
     "binance": {"binance.com"},
     "coinbase": {"coinbase.com"},
+    # real domains that contain a popular brand name
+    "microsoft": {"microsoftonline.com", "microsoft365.com", "microsoftstore.com"},
+    "google": {"googleapis.com", "googleusercontent.com", "googlevideo.com", "googlesyndication.com", "googletagmanager.com", "googlemail.com"},
+    "amazon": {"amazonaws.com", "amazon.co.uk", "amazon.de", "amazon.ca", "amazon.com.au", "amazonpay.in"},
+    "paypal": {"paypal.me", "paypalobjects.com", "paypal.co.uk"},
 }
 
 BRAND_LEGIT = {b: {f"{b}.{s}" for s in LEGIT_BRAND_SUFFIXES} for b in POPULAR_BRANDS}

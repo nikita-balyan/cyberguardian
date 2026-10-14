@@ -55,8 +55,27 @@ def test_risk_scoring_accumulations():
     # Cat 3 (Brand): 25
     # Independent: SSL (15) + TLD (10) + IP (20) + Redirects (15) = 60
     # Total heuristic = 25 + 25 + 60 = 110 -> clamped to 100
-    # Composite = 0.4*100 + 0.4*0 + 0.2*0 = 40
+    # Composite = 0.6*100 + 0.2*0 + 0.2*0 = 60
     assessment = calculate_url_risk(evidence)
-    assert assessment.score == 40
-    assert assessment.level == 'MEDIUM'
+    assert assessment.score == 60
+    assert assessment.level == 'HIGH'
     assert len(assessment.triggers) >= 5
+
+def test_missing_ml_score_is_not_invented():
+    evidence = URLEvidence(final_url="https://example.com", ssl_valid=True, ml_probability=None)
+    assessment = calculate_url_risk(evidence)
+    assert assessment.score == 0
+    assert not any("Machine Learning" in t for t in assessment.triggers)
+
+
+def test_threat_feed_hit_pins_score_critical():
+    evidence = URLEvidence(final_url="https://example.com", ssl_valid=True,
+                           safe_browsing_hit=True, ml_probability=0.0)
+    assessment = calculate_url_risk(evidence)
+    assert assessment.score >= 95
+    assert assessment.level == "CRITICAL"
+
+
+def test_weak_ml_score_alone_cannot_raise_verdict_above_low():
+    evidence = URLEvidence(final_url="https://example.com", ssl_valid=True, ml_probability=0.76)
+    assert calculate_url_risk(evidence).level == "LOW"

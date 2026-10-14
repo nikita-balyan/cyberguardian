@@ -1,6 +1,17 @@
 #risk_engine.py
 from ..models.schemas import URLEvidence, RiskAssessment, QREvidence, MessageEvidence
 
+
+def _level_for(score: int) -> str:
+    if score >= 80:
+        return 'CRITICAL'
+    if score >= 60:
+        return 'HIGH'
+    if score >= 30:
+        return 'MEDIUM'
+    return 'LOW'
+
+
 def calculate_qr_risk(evidence: QREvidence) -> RiskAssessment:
     if not evidence.has_qr_code:
         return RiskAssessment(
@@ -14,27 +25,28 @@ def calculate_qr_risk(evidence: QREvidence) -> RiskAssessment:
             level="LOW",
             triggers=["QR code payload is not a URL"]
         )
-    
+
     assessment = calculate_url_risk(evidence.url_evidence)
     assessment.triggers.insert(0, f"Decoded URL from QR code: {evidence.extracted_text}")
     return assessment
 
+
 def calculate_message_risk(evidence: MessageEvidence) -> RiskAssessment:
     triggers = []
     score = 0
-    
+
     if evidence.urgency_detected:
         score += 20
         triggers.append("Urgency or pressure tactics detected in text (+20)")
-        
+
     if evidence.financial_lures_detected:
         score += 25
         triggers.append("Financial or credential lures detected in text (+25)")
-        
+
     if evidence.suspicious_phone_or_sender:
         score += 15
         triggers.append("Suspicious phone number or spoofed sender pattern detected (+15)")
-        
+
     # If there are any extracted URLs, find the highest risk score among them
     max_url_score = 0
     max_url_triggers = []
@@ -43,33 +55,28 @@ def calculate_message_risk(evidence: MessageEvidence) -> RiskAssessment:
         if url_risk.score > max_url_score:
             max_url_score = url_risk.score
             max_url_triggers = url_risk.triggers
-            
+
     if max_url_score > 0:
         score += max_url_score
-        triggers.append(f"High risk embedded URL detected with score {max_url_score}/100")
+        if max_url_score >= 60:
+            triggers.append(f"High risk embedded URL detected with score {max_url_score}/100")
+        else:
+            triggers.append(f"Embedded URL detected with risk score {max_url_score}/100")
         for t in max_url_triggers:
             triggers.append(f"  [URL Trigger] {t}")
-            
+
     score = max(0, min(100, score))
-    
-    if score >= 80:
-        level = 'CRITICAL'
-    elif score >= 60:
-        level = 'HIGH'
-    elif score >= 30:
-        level = 'MEDIUM'
-    else:
-        level = 'LOW'
-        
+
     return RiskAssessment(
         score=score,
-        level=level,
+        level=_level_for(score),
         triggers=triggers
     )
 
+
 def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     triggers = []
-    
+
     # Category 1: Threat Intelligence (Cap: 60)
     cat1_score = 0
     threat_intel = getattr(evidence, "threat_intel", None)
@@ -118,19 +125,19 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
 
     # Independent factors
     other_score = 0
-    
+
     if not evidence.ssl_valid:
         other_score += 15
         triggers.append("Invalid or missing SSL certificate (+15)")
-        
+
     if evidence.suspicious_tld:
         other_score += 10
         triggers.append("Suspicious TLD extension (+10)")
-        
+
     if evidence.is_ip_address:
         other_score += 20
         triggers.append("Raw IP address used as hostname (+20)")
-        
+
     if evidence.redirect_count > 2:
         other_score += 15
         triggers.append(f"Excessive HTTP redirects ({evidence.redirect_count} > 2) (+15)")
@@ -141,16 +148,19 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
 
     # ML Probability and Score
     ml_prob = getattr(evidence, "ml_probability", None)
-    if ml_prob is None:
-        ml_prob = 0.1 if heuristic_score < 20 else 0.8
-    ml_score = int(ml_prob * 100)
-    
-    # Only add ML probability trigger if there's a non-zero probability
-    if ml_prob > 0:
+    has_ml = ml_prob is not None
+    ml_score = int(ml_prob * 100) if has_ml else 0
+
+    if has_ml and ml_prob > 0:
         triggers.append(f"Machine Learning secondary classifier phishing probability: {ml_prob:.2f} (score: {ml_score}/100)")
 
     # Composite Risk Score Calculation
-    composite_score = int(0.4 * heuristic_score + 0.4 * ml_score + 0.2 * (intel_feed_hits * 33))
+    # The ML model only sees the hostname's shape, so it gets a small weight.
+    intel_score = intel_feed_hits * 33
+    if has_ml:
+        composite_score = int(0.6 * heuristic_score + 0.2 * ml_score + 0.2 * intel_score)
+    else:  # no ML score available: don't invent one
+        composite_score = int(0.8 * heuristic_score + 0.2 * intel_score)
 
     # Override: If Safe Browsing hit or threat intel flagged is true, minimum score is pinned to 95 (CRITICAL)
     if evidence.safe_browsing_hit or threat_intel_flagged:
@@ -159,19 +169,8 @@ def calculate_url_risk(evidence: URLEvidence) -> RiskAssessment:
     # Clamp composite score between 0 and 100
     composite_score = max(0, min(100, composite_score))
 
-    # Determine Level
-    if composite_score >= 80:
-        level = 'CRITICAL'
-    elif composite_score >= 60:
-        level = 'HIGH'
-    elif composite_score >= 30:
-        level = 'MEDIUM'
-    else:
-        level = 'LOW'
-
     return RiskAssessment(
         score=composite_score,
-        level=level,
+        level=_level_for(composite_score),
         triggers=triggers
     )
-

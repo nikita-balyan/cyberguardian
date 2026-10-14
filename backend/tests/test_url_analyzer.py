@@ -24,8 +24,19 @@ def test_ssrf_rejection():
     with pytest.raises(ValueError, match="Private and local"):
         asyncio.run(analyze_url("http://127.0.0.1/admin"))
 
-    with pytest.raises(ValueError, match="SSRF protection"):
+    with pytest.raises(ValueError, match="Private and local"):
         asyncio.run(analyze_url("http://localhost:8080"))
 
-    with pytest.raises(ValueError, match="SSRF protection"):
+    with pytest.raises(ValueError, match="Private and local"):
         asyncio.run(analyze_url("http://192.168.1.100"))
+
+def test_real_brand_domains_are_not_flagged():
+    for host in ("login.microsoftonline.com", "accounts.google.com",
+                 "s3.us-east-2.amazonaws.com", "www.amazon.in"):
+        assert not check_brand_impersonation(host)
+
+
+def test_lookalike_brand_domains_are_flagged():
+    for host in ("paypal-login.vercel.app", "secure-paypal-login.com",
+                 "login.webwindos-whatsapp.com.cn"):
+        assert check_brand_impersonation(host)
