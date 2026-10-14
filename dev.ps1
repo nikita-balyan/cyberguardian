@@ -1,0 +1,2 @@
+Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$PSScriptRoot'; .\venv\Scripts\Activate.ps1; uvicorn app.main:app --app-dir backend --reload --reload-dir backend --port 8000"
+Start-Process powershell -ArgumentList "-NoExit","-Command","cd '$PSScriptRoot\frontend'; npm run dev"
