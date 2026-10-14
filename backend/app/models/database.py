@@ -1,18 +1,21 @@
 #database.py
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from sqlalchemy import JSON, create_engine, Column, Integer, String, Text, DateTime, Float
+from sqlalchemy import JSON, Index, create_engine, Column, Integer, String, Text, DateTime, Float
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID, JSONB
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app.db.session import ASYNC_DATABASE_URL, async_engine, Base, async_session_maker
 
+logger = logging.getLogger(__name__)
+
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./cyberguardian.db")
 
-# Normalize DB URL for sync engine (ensure postgresql:// and omit SQLite-specific connect_args for PostgreSQL)
+# Normalize DB URL for the sync engine
 if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
     _normalized_sync = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
 elif SQLALCHEMY_DATABASE_URL.startswith("postgresql+asyncpg://"):
@@ -23,19 +26,24 @@ else:
 connect_args = {"check_same_thread": False} if _normalized_sync.startswith("sqlite") else {}
 
 engine = create_engine(
-    _normalized_sync, connect_args=connect_args
+    _normalized_sync,
+    connect_args=connect_args,
+    pool_pre_ping=True,   # drop dead connections (the Supabase pooler closes idle ones)
+    pool_recycle=300,
 )
-
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 class ScanAuditLog(Base):
     __tablename__ = "scan_audit_logs"
+    __table_args__ = (Index("ix_scan_audit_logs_owner_created", "owner_id", "created_at"),)
 
     id = Column(
         PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4, index=True
     )
+    # Anonymous per-browser id. NULL = old rows from before history was scoped (nobody can see them).
+    owner_id = Column(String(64), nullable=True)
     target = Column(Text, nullable=False)
     modality = Column(String(20), nullable=False)  # "url" | "qr" | "text" | "batch"
     composite_risk_score = Column(Integer, nullable=False)
@@ -92,8 +100,8 @@ class ScanAuditLog(Base):
         self.evidence_json = value
 
 
-
-# Keep backward compatibility init_db for sync engine
+# Sync init. NOTE: create_all only creates MISSING tables. It never adds columns to an
+# existing one, which is why the owner_id column needs the SQL in the setup steps.
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
@@ -104,11 +112,31 @@ async def async_init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+def purge_old_scans(retention_days: int) -> int:
+    """Delete saved scans older than retention_days. Returns how many were removed."""
+    if retention_days <= 0:
+        return 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    db = SessionLocal()
+    try:
+        removed = (
+            db.query(ScanAuditLog)
+            .filter(ScanAuditLog.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return removed
+    except Exception:
+        db.rollback()
+        logger.exception("Could not purge old scans")
+        return 0
+    finally:
+        db.close()
+
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
-

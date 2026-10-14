@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Download, Sun, Moon, Loader2, AlertCircle, Check } from 'lucide-react'
-import { getScanHistory, checkHealth } from '../services/api'
+import { getScanHistory, checkHealth, clearHistory } from '../services/api'
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
 
@@ -41,6 +41,25 @@ export default function ReportsSettings({ theme, onToggleTheme }) {
   const [error, setError] = useState(null)
   const [done, setDone] = useState(null)
   const [health, setHealth] = useState({ state: 'idle', message: '' })
+
+  const [clearing, setClearing] = useState(false)
+  const [clearedCount, setClearedCount] = useState(null)
+  const [clearError, setClearError] = useState(null)
+
+  const handleClear = async () => {
+    if (!window.confirm("Delete every scan saved for this browser? This can't be undone.")) return
+    setClearing(true)
+    setClearError(null)
+    setClearedCount(null)
+    try {
+      const res = await clearHistory()
+      setClearedCount(res?.deleted ?? 0)
+    } catch (err) {
+      setClearError(err.message || 'Could not delete your scan history.')
+    } finally {
+      setClearing(false)
+    }
+  }
 
   const exportHistory = async (kind) => {
     setBusy(kind)
@@ -114,6 +133,24 @@ export default function ReportsSettings({ theme, onToggleTheme }) {
         <p className="mt-3 text-xs text-muted">
           To export a single scan as a PDF, use the buttons on that scan's result.
         </p>
+      </Section>
+      
+      <Section title="Your data" description="Scans are saved only for this browser and expire automatically.">
+        <button type="button" onClick={handleClear} disabled={clearing} className={btnOutline}>
+          {clearing && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+          {clearing ? 'Deleting…' : 'Delete my scan history'}
+        </button>
+        {clearedCount !== null && (
+          <p role="status" className="mt-3 text-xs text-muted">
+            Deleted {clearedCount} saved {clearedCount === 1 ? 'scan' : 'scans'}.
+          </p>
+        )}
+        {clearError && (
+          <div role="alert" className="mt-3 flex items-start gap-2 rounded-md bg-sev-critical-bg p-3 text-sm text-sev-critical">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{clearError}</span>
+          </div>
+        )}
       </Section>
 
       <Section title="Appearance" description="Choose how CyberGuardian looks. Your choice is saved in this browser.">

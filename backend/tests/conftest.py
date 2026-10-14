@@ -1,3 +1,4 @@
+#conftest.py
 import os
 import sys
 
@@ -25,6 +26,16 @@ def init_test_db(request):
     init_db()
     yield
     ScanAuditLog.__table__.drop(bind=engine, checkfirst=True)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits():
+    """Rate-limit counters live in memory. Clear them so tests never affect each other."""
+    from app import security
+    for limiter in (security.scan_limiter, security.batch_limiter,
+                    security.read_limiter, security.daily_cap):
+        limiter._hits.clear()
+    yield
 
 
 @pytest.fixture

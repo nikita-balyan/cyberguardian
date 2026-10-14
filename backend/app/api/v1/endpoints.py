@@ -1,9 +1,11 @@
+#endpoints.py
 import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,7 @@ from app.services.risk_engine import (
 )
 from app.services.ai_explainer import AIExplainer
 from app.services.report_generator import ReportGenerator
+from app.security import get_owner_id, scan_limiter, batch_limiter, read_limiter, daily_cap
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -38,9 +41,14 @@ GENERIC_ERROR = "Something went wrong while scanning. Please try again."
 MAX_URL_CHARS = 2048
 MAX_MESSAGE_CHARS = 10_000
 MAX_QR_BYTES = 5 * 1024 * 1024
+MAX_EXPORT_BYTES = 1024 * 1024
 MAX_BATCH_ITEMS = 50
 BATCH_CONCURRENCY = 10
 BATCH_ITEM_TIMEOUT = 20.0  # WHOIS + SSL + redirects can legitimately take ~10s
+
+# Per-IP limit first, then the global daily cap. That order stops one IP from
+# draining the global quota with requests its own limit would have rejected.
+SCAN_LIMITS = [Depends(scan_limiter), Depends(daily_cap)]
 
 
 # --------------------------------------------------------------------------- #
@@ -69,10 +77,10 @@ def _ml(url_ev) -> float:
     return float(p) if p is not None else 0.0
 
 
-def _save(db: Session, **fields) -> None:
+def _save(db: Session, owner_id: Optional[str], **fields) -> None:
     """Write to the audit log. A history-write failure must never hide a finished scan."""
     try:
-        db.add(ScanAuditLog(created_at=datetime.now(timezone.utc), **fields))
+        db.add(ScanAuditLog(owner_id=owner_id, created_at=datetime.now(timezone.utc), **fields))
         db.commit()
     except Exception:
         db.rollback()
@@ -82,8 +90,12 @@ def _save(db: Session, **fields) -> None:
 # --------------------------------------------------------------------------- #
 # Single scans
 # --------------------------------------------------------------------------- #
-@router.post("/scan/url", response_model=URLScanResponse)
-async def scan_url(request: URLScanRequest, db: Session = Depends(get_db)):
+@router.post("/scan/url", response_model=URLScanResponse, dependencies=SCAN_LIMITS)
+async def scan_url(
+    request: URLScanRequest,
+    owner_id: Optional[str] = Depends(get_owner_id),
+    db: Session = Depends(get_db),
+):
     if len(request.url) > MAX_URL_CHARS:
         raise HTTPException(status_code=400, detail=f"That URL is too long (limit {MAX_URL_CHARS} characters).")
     try:
@@ -92,7 +104,7 @@ async def scan_url(request: URLScanRequest, db: Session = Depends(get_db)):
         explanation = await _explain(evidence, risk_assessment)
 
         _save(
-            db,
+            db, owner_id,
             modality="url",
             target=request.url,
             severity_level=risk_assessment.level,
@@ -119,8 +131,12 @@ async def scan_url(request: URLScanRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=GENERIC_ERROR)
 
 
-@router.post("/scan/qr", response_model=QRScanResponse)
-async def scan_qr(file: UploadFile = File(...), db: Session = Depends(get_db)):
+@router.post("/scan/qr", response_model=QRScanResponse, dependencies=SCAN_LIMITS)
+async def scan_qr(
+    file: UploadFile = File(...),
+    owner_id: Optional[str] = Depends(get_owner_id),
+    db: Session = Depends(get_db),
+):
     try:
         content = await file.read(MAX_QR_BYTES + 1)
         if len(content) > MAX_QR_BYTES:
@@ -134,7 +150,7 @@ async def scan_qr(file: UploadFile = File(...), db: Session = Depends(get_db)):
         url_ev = evidence.url_evidence
 
         _save(
-            db,
+            db, owner_id,
             modality="qr",
             target=target_str,
             severity_level=risk_assessment.level,
@@ -160,8 +176,12 @@ async def scan_qr(file: UploadFile = File(...), db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=GENERIC_ERROR)
 
 
-@router.post("/scan/message", response_model=MessageScanResponse)
-async def scan_message(request: MessageScanRequest, db: Session = Depends(get_db)):
+@router.post("/scan/message", response_model=MessageScanResponse, dependencies=SCAN_LIMITS)
+async def scan_message(
+    request: MessageScanRequest,
+    owner_id: Optional[str] = Depends(get_owner_id),
+    db: Session = Depends(get_db),
+):
     if len(request.message) > MAX_MESSAGE_CHARS:
         raise HTTPException(status_code=400, detail=f"That message is too long (limit {MAX_MESSAGE_CHARS} characters).")
     try:
@@ -172,7 +192,7 @@ async def scan_message(request: MessageScanRequest, db: Session = Depends(get_db
         url_evs = evidence.url_evidences or []
 
         _save(
-            db,
+            db, owner_id,
             modality="text",
             target=request.message,
             severity_level=risk_assessment.level,
@@ -200,14 +220,25 @@ async def scan_message(request: MessageScanRequest, db: Session = Depends(get_db
 
 
 # --------------------------------------------------------------------------- #
-# History
+# History (scoped to the browser's anonymous id)
 # --------------------------------------------------------------------------- #
-@router.get("/history", response_model=HistoryResponse)
-def get_scan_history(db: Session = Depends(get_db)):
+def _empty_history() -> HistoryResponse:
+    zeros = {"high": 0, "medium": 0, "low": 0, "critical": 0,
+             "HIGH": 0, "MEDIUM": 0, "LOW": 0, "CRITICAL": 0}
+    return HistoryResponse(total_scans=0, risk_breakdown=zeros, scans=[])
+
+
+@router.get("/history", response_model=HistoryResponse, dependencies=[Depends(read_limiter)])
+def get_scan_history(
+    owner_id: Optional[str] = Depends(get_owner_id),
+    db: Session = Depends(get_db),
+):
+    if owner_id is None:  # no visitor id: nothing to show, and never show other people's scans
+        return _empty_history()
     try:
-        # Count in SQL instead of loading every row into Python
         rows = (
             db.query(ScanAuditLog.severity_level, func.count(ScanAuditLog.id))
+            .filter(ScanAuditLog.owner_id == owner_id)
             .group_by(ScanAuditLog.severity_level)
             .all()
         )
@@ -229,6 +260,7 @@ def get_scan_history(db: Session = Depends(get_db)):
 
         latest_scans = (
             db.query(ScanAuditLog)
+            .filter(ScanAuditLog.owner_id == owner_id)
             .order_by(ScanAuditLog.created_at.desc(), ScanAuditLog.id.desc())
             .limit(50)
             .all()
@@ -242,6 +274,28 @@ def get_scan_history(db: Session = Depends(get_db)):
     except Exception:
         logger.exception("Could not load scan history")
         raise HTTPException(status_code=500, detail="Could not load scan history.")
+
+
+@router.delete("/history", dependencies=[Depends(read_limiter)])
+def clear_scan_history(
+    owner_id: Optional[str] = Depends(get_owner_id),
+    db: Session = Depends(get_db),
+):
+    """Delete every saved scan belonging to this browser."""
+    if owner_id is None:
+        raise HTTPException(status_code=400, detail="Missing visitor id.")
+    try:
+        deleted = (
+            db.query(ScanAuditLog)
+            .filter(ScanAuditLog.owner_id == owner_id)
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        return {"deleted": deleted}
+    except Exception:
+        db.rollback()
+        logger.exception("Could not delete scan history")
+        raise HTTPException(status_code=500, detail="Could not delete scan history.")
 
 
 # --------------------------------------------------------------------------- #
@@ -286,8 +340,12 @@ def _unverified(item: str, summary: str) -> BatchScanItemResult:
     )
 
 
-@router.post("/scan/batch", response_model=BatchScanResponse)
-async def scan_batch(request: BatchScanRequest):
+@router.post("/scan/batch", response_model=BatchScanResponse, dependencies=[Depends(batch_limiter)])
+async def scan_batch(
+    request: BatchScanRequest,
+    http_request: Request,
+    owner_id: Optional[str] = Depends(get_owner_id),
+):
     """Scan up to 50 URLs or messages concurrently (semaphore-limited)."""
     if request.scan_type not in ("url", "message"):
         raise HTTPException(status_code=400, detail="scan_type must be 'url' or 'message'.")
@@ -297,6 +355,11 @@ async def scan_batch(request: BatchScanRequest):
         raise HTTPException(status_code=400, detail="No valid items provided for batch scan.")
     if len(cleaned_items) > MAX_BATCH_ITEMS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_BATCH_ITEMS} items allowed per batch scan.")
+    if any(len(i) > MAX_MESSAGE_CHARS for i in cleaned_items):
+        raise HTTPException(status_code=400, detail="One of the items is too long.")
+
+    # A batch costs one scan per item against the global daily cap
+    daily_cap.check(http_request, cost=len(cleaned_items))
 
     semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
 
@@ -321,7 +384,7 @@ async def scan_batch(request: BatchScanRequest):
             db_session = SessionLocal()
             try:
                 _save(
-                    db_session,
+                    db_session, owner_id,
                     modality="url" if request.scan_type == "url" else "text",
                     target=item,
                     severity_level=risk_assessment.level,
@@ -361,9 +424,15 @@ async def scan_batch(request: BatchScanRequest):
 # --------------------------------------------------------------------------- #
 # PDF export
 # --------------------------------------------------------------------------- #
-@router.post("/export/pdf")
-async def export_pdf(scan_data: dict):
+@router.post("/export/pdf", dependencies=[Depends(read_limiter)])
+async def export_pdf(scan_data: dict, http_request: Request):
     """Export scan results as a downloadable PDF report."""
+    try:
+        size = int(http_request.headers.get("content-length") or 0)
+    except ValueError:
+        size = 0
+    if size > MAX_EXPORT_BYTES:
+        raise HTTPException(status_code=413, detail="That report is too large to export.")
     try:
         pdf_bytes = await asyncio.to_thread(ReportGenerator.generate_pdf, scan_data)
         return Response(
