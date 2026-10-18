@@ -24,3 +24,5 @@ cyberguardian.db
 *.sqlite3
 data/
 
+
+*.pkl.bak
