@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # libzbar0 is needed by pyzbar for QR decoding; curl is used by the healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzbar0 \
+    libgomp1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

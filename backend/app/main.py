@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import config
 from .api.v1 import health, endpoints
 from app.models.database import init_db, purge_old_scans
+from app.ml.inference import load_model
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if load_model() is None:
+        logger.error("ML model failed to load: scores will use the heuristic fallback")
     removed = await asyncio.to_thread(purge_old_scans, config.HISTORY_RETENTION_DAYS)
     if removed:
         logger.info("Deleted %s scans older than %s days", removed, config.HISTORY_RETENTION_DAYS)

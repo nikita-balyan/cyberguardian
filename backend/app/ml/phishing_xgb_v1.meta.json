@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-10-14T07:22:08.246498+00:00",
+  "trained_at": "2026-10-18T13:27:34.428848+00:00",
   "feature_order": [
     "url_length",
     "hostname_length",
@@ -19,18 +19,18 @@
   "rows_per_class": 50000,
   "split": "GroupShuffleSplit by registered domain",
   "grouped_test_metrics": {
-    "accuracy": 0.7377335950166396,
-    "precision": 0.9020417028670721,
-    "recall": 0.6129436941923105,
-    "f1": 0.7299090469704292,
-    "roc_auc": 0.8076339120886026,
-    "pr_auc": 0.8793100874554206,
-    "recall_at_1pct_fpr": 0.34159840602169583,
+    "accuracy": 0.7412471514398177,
+    "precision": 0.8445391414141414,
+    "recall": 0.5715659047212134,
+    "f1": 0.6817428971843547,
+    "roc_auc": 0.7815865038866362,
+    "pr_auc": 0.8219835724569264,
+    "recall_at_1pct_fpr": 0.3546250801110874,
     "confusion": {
-      "tn": 8985,
-      "fp": 902,
-      "fn": 5245,
-      "tp": 8306
+      "tn": 8961,
+      "fp": 985,
+      "fn": 4011,
+      "tp": 5351
     }
   }
 }
