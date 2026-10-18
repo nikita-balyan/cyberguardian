@@ -40,3 +40,10 @@ def test_lookalike_brand_domains_are_flagged():
     for host in ("paypal-login.vercel.app", "secure-paypal-login.com",
                  "login.webwindos-whatsapp.com.cn"):
         assert check_brand_impersonation(host)
+
+def test_hosts_on_brand_infrastructure_are_not_flagged():
+    assert not check_brand_impersonation("mybucket.s3.us-east-2.amazonaws.com")
+
+
+def test_brand_names_on_someone_elses_storage_are_flagged():
+    assert check_brand_impersonation("paypal-login.s3.us-east-2.amazonaws.com")

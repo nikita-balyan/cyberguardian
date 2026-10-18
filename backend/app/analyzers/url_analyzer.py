@@ -19,9 +19,13 @@ from ..ml.feature_extractor import extract_url_features
 
 try:  # bundled public-suffix snapshot, no network call
     import tldextract
+    # private suffixes on: 'x.vercel.app' and 'y.vercel.app' are different sites (used for WHOIS)
     _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=True)
+    # ICANN suffixes only: 's3.amazonaws.com' belongs to 'amazonaws.com' (used for brand checks)
+    _TLD_ICANN = tldextract.TLDExtract(suffix_list_urls=(), include_psl_private_domains=False)
 except Exception:  # pragma: no cover - fallback if the package isn't installed
     _TLD_EXTRACT = None
+    _TLD_ICANN = None
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +70,22 @@ class BlockedTarget(ValueError):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def registered_domain(hostname: str) -> str:
+def _top_domain(result) -> str:
+    # newer tldextract versions renamed registered_domain
+    if hasattr(result, "top_domain_under_public_suffix"):
+        return result.top_domain_under_public_suffix
+    return result.registered_domain
+
+
+def registered_domain(hostname: str, icann_only: bool = False) -> str:
     """'shop.example.co.in' -> 'example.co.in' (falls back to the last two labels)."""
     host = (hostname or "").lower().strip(".")
     if not host:
         return ""
-    if _TLD_EXTRACT is not None:
+    extractor = _TLD_ICANN if icann_only else _TLD_EXTRACT
+    if extractor is not None:
         try:
-            return _TLD_EXTRACT(host).registered_domain or host
+            return _top_domain(extractor(host)) or host
         except Exception:
             pass
     parts = host.split(".")
@@ -212,7 +224,7 @@ def check_brand_impersonation(hostname: str) -> bool:
     host = (hostname or "").lower().strip(".")
     if not host:
         return False
-    reg = registered_domain(host)
+    reg = registered_domain(host, icann_only=True)
     tokens = {t for label in host.split(".") for t in re.split(r"[^a-z]+", label) if t}
     for brand, legit_domains in BRAND_LEGIT.items():
         if any(_token_hits_brand(t, brand) for t in tokens) and reg not in legit_domains:

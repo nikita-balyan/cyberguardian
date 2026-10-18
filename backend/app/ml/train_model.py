@@ -70,7 +70,8 @@ def registered_domain(url: str) -> str:
         return ""
     if _TLD is not None:
         try:
-            return _TLD(host).registered_domain or host
+            r = _TLD(host)
+            return (getattr(r, "top_domain_under_public_suffix", None) or r.registered_domain) or host
         except Exception:
             pass
     parts = host.split(".")
