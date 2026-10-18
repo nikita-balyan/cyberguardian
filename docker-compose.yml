@@ -1,19 +1,16 @@
 
-version: '3.8'
-
 services:
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: cyberguardian-backend
-    ports:
-      - "8001:8001"
+    env_file: .env            # DATABASE_URL and the API keys come from your real .env
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GOOGLE_SAFE_BROWSING_API_KEY=${GOOGLE_SAFE_BROWSING_API_KEY}
-    volumes:
-      - ./cyberguardian.db:/app/cyberguardian.db
+      APP_ENV: production
+      TRUST_PROXY_HEADERS: "true"   # safe here: only nginx can reach the backend
+    expose:
+      - "8000"                # internal only, nothing is published to your machine or the internet
     restart: unless-stopped
     networks:
       - cyberguardian-net
@@ -22,11 +19,14 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: /api/v1   # same-origin: nginx forwards /api/ to the backend
     container_name: cyberguardian-frontend
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - cyberguardian-net
