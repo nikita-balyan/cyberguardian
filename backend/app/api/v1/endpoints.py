@@ -443,3 +443,13 @@ async def export_pdf(scan_data: dict, http_request: Request):
     except Exception:
         logger.exception("PDF export failed")
         raise HTTPException(status_code=500, detail="Could not generate the PDF report.")
+
+# TEMPORARY: delete after checking the proxy headers
+@router.get("/_debug/ip")
+def debug_ip(request: Request):
+    return {
+        "client_host": request.client.host if request.client else None,
+        "x_forwarded_for": request.headers.get("x-forwarded-for"),
+        "cf_connecting_ip": request.headers.get("cf-connecting-ip"),
+        "true_client_ip": request.headers.get("true-client-ip"),
+    }
